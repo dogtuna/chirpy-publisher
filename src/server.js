@@ -1351,18 +1351,62 @@ async function classifyPostSemanticRoute(corpus) {
     }
     const data = await response.json();
     const parsed = parseLooseJsonObject(String(data?.response || '').trim());
-    const bucket = normalizeTagList([parsed?.bucket]).find((x) => MODEL_BUCKETS.includes(x)) || 'general';
-    const audience = normalizeTagList([parsed?.audience]).find((x) => MODEL_AUDIENCES.includes(x)) || 'general';
-    const subtopics = normalizeTagList(Array.isArray(parsed?.subtopics) ? parsed.subtopics : [])
+    const bucketRaw = parsed?.bucket ?? (Array.isArray(parsed?.buckets) ? parsed.buckets[0] : '');
+    const audienceRaw = parsed?.audience ?? (Array.isArray(parsed?.audiences) ? parsed.audiences[0] : '');
+    const bucket = coerceAllowedTag(bucketRaw, MODEL_BUCKETS) || 'general';
+    const audience = coerceAllowedTag(audienceRaw, MODEL_AUDIENCES) || 'general';
+    const subtopicsRaw = Array.isArray(parsed?.subtopics)
+      ? parsed.subtopics
+      : String(parsed?.subtopics || '')
+          .split(',')
+          .map((x) => x.trim())
+          .filter(Boolean);
+    const subtopics = normalizeTagList(subtopicsRaw)
       .filter((x) => !isWeakAudienceTag(x))
       .slice(0, 3);
-    const entities = normalizeTagList(Array.isArray(parsed?.entities) ? parsed.entities : [])
+    const entitiesRaw = Array.isArray(parsed?.entities)
+      ? parsed.entities
+      : String(parsed?.entities || '')
+          .split(',')
+          .map((x) => x.trim())
+          .filter(Boolean);
+    const entities = normalizeTagList(entitiesRaw)
       .filter((x) => !isWeakTag(x))
       .slice(0, 2);
-    return { bucket, audience, subtopics, entities };
+    if (bucket !== 'general' || audience !== 'general' || subtopics.length) {
+      return { bucket, audience, subtopics, entities };
+    }
+
+    const fallbackBuckets = await inferBucketsWithOllama(text, MODEL_BUCKETS);
+    const fallbackBucket = coerceAllowedTag(fallbackBuckets[0], MODEL_BUCKETS) || 'general';
+    const fallbackAudiences = await inferAudienceTagsWithOllama(text, [fallbackBucket], MODEL_AUDIENCES);
+    const fallbackAudience = coerceAllowedTag(fallbackAudiences[0], MODEL_AUDIENCES) || 'general';
+    return { bucket: fallbackBucket, audience: fallbackAudience, subtopics, entities };
   } catch (_error) {
-    return { bucket: 'general', audience: 'general', subtopics: [], entities: [] };
+    const text = String(corpus || '').trim();
+    const fallbackBuckets = await inferBucketsWithOllama(text, MODEL_BUCKETS);
+    const fallbackBucket = coerceAllowedTag(fallbackBuckets[0], MODEL_BUCKETS) || 'general';
+    const fallbackAudiences = await inferAudienceTagsWithOllama(text, [fallbackBucket], MODEL_AUDIENCES);
+    const fallbackAudience = coerceAllowedTag(fallbackAudiences[0], MODEL_AUDIENCES) || 'general';
+    return { bucket: fallbackBucket, audience: fallbackAudience, subtopics: [], entities: [] };
   }
+}
+
+function coerceAllowedTag(value, allowed) {
+  const clean = String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!clean) return '';
+  const allowedList = normalizeTagList(allowed || []);
+  if (allowedList.includes(clean)) return clean;
+  const compact = clean.replace(/\s+/g, '-');
+  if (allowedList.includes(compact)) return compact;
+  for (const item of allowedList) {
+    if (clean.includes(item) || item.includes(clean)) return item;
+  }
+  return '';
 }
 
 function prioritizeAudienceTags(tags, context) {
