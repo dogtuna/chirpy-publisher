@@ -1292,8 +1292,9 @@ async function buildSemanticTags({ autoTagEnabled, existingTags, text, blocks, l
   const semantic = await analyzePostSemantics(corpus);
   const namedPhrases = extractNamedPhraseTags(corpus).slice(0, 5);
   const mediaTitles = extractMediaTitleCandidates(corpus).slice(0, 4);
-  const bucketTags = semantic.buckets.length
-    ? semantic.buckets
+  const semanticBuckets = normalizeTagList(semantic.buckets || []).filter((x) => x !== 'general');
+  const bucketTags = semanticBuckets.length
+    ? semanticBuckets
     : taxonomy.buckets.length
       ? taxonomy.buckets
       : await inferBucketTags(corpus, namedPhrases);
@@ -1311,7 +1312,11 @@ async function buildSemanticTags({ autoTagEnabled, existingTags, text, blocks, l
   ]);
 
   const hasStrongSemanticSignal =
-    bucketTags.length >= 1 && (audienceTags.length >= 1 || entityTags.length >= 1 || mediaTitles.length >= 1 || namedPhrases.length >= 1);
+    bucketTags.some((x) => x !== 'general') ||
+    audienceTags.some((x) => x !== 'general') ||
+    entityTags.length >= 1 ||
+    mediaTitles.length >= 1 ||
+    namedPhrases.length >= 1;
 
   // Strict audience-first mode:
   // Keep only who-cares signals (audiences), broad buckets, and concrete entities/titles.
@@ -1602,21 +1607,31 @@ async function inferSemanticTaxonomy(corpus) {
   const bucketScores = await scoreTaxonomy(postVector, BUCKET_TAXONOMY, 'bucket');
   const audienceScores = await scoreTaxonomy(postVector, AUDIENCE_TAXONOMY, 'audience');
 
-  const buckets = bucketScores
-    .filter((x) => x.score >= 0.26)
-    .map((x) => x.tag)
-    .filter((x) => x !== 'general')
-    .slice(0, 2);
-  const audiences = audienceScores
-    .filter((x) => x.score >= 0.24)
-    .map((x) => x.tag)
-    .filter((x) => x !== 'general')
-    .slice(0, 3);
+  const buckets = pickTopSemanticTags(bucketScores, { max: 2, minScore: 0.19, delta: 0.04, excludeGeneral: true });
+  const audiences = pickTopSemanticTags(audienceScores, { max: 3, minScore: 0.17, delta: 0.05, excludeGeneral: true });
 
   return {
     buckets: buckets.length ? buckets : ['general'],
     audiences
   };
+}
+
+function pickTopSemanticTags(scored, opts) {
+  const options = opts || {};
+  const max = Number.isFinite(options.max) ? options.max : 2;
+  const minScore = Number.isFinite(options.minScore) ? options.minScore : 0.2;
+  const delta = Number.isFinite(options.delta) ? options.delta : 0.04;
+  const excludeGeneral = options.excludeGeneral !== false;
+
+  const list = Array.isArray(scored) ? scored : [];
+  const filtered = excludeGeneral ? list.filter((x) => x.tag !== 'general') : list;
+  if (!filtered.length) return [];
+  const top = filtered[0];
+  if (!top || !Number.isFinite(top.score) || top.score < minScore) return [];
+  return filtered
+    .filter((x) => Number.isFinite(x.score) && x.score >= top.score - delta)
+    .slice(0, max)
+    .map((x) => x.tag);
 }
 
 async function scoreTaxonomy(postVector, taxonomy, cachePrefix) {
