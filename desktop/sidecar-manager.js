@@ -10,9 +10,20 @@ class SidecarManager {
     this.ipfsProcess = null;
     this.ollamaProcess = null;
     this.ollamaPulls = new Map();
+    this.ollamaPullProgress = new Map();
     this.state = {
       ipfs: { available: false, running: false, source: 'none', error: '', binaryPath: '' },
-      ollama: { available: false, running: false, source: 'none', error: '', binaryPath: '', modelReady: false }
+      ollama: {
+        available: false,
+        running: false,
+        source: 'none',
+        error: '',
+        binaryPath: '',
+        modelReady: false,
+        modelPhase: 'checking',
+        modelDetail: '',
+        modelProgress: 0
+      }
     };
   }
 
@@ -142,11 +153,17 @@ class SidecarManager {
     const missing = requiredModels.filter((modelName) => !this.ollamaModelExists(tags, modelName));
     if (!missing.length) {
       this.state.ollama.modelReady = true;
+      this.state.ollama.modelPhase = 'ready';
+      this.state.ollama.modelDetail = '';
+      this.state.ollama.modelProgress = 100;
       return;
     }
 
     this.state.ollama.modelReady = false;
     if (!ollamaBin) return;
+    this.state.ollama.modelPhase = 'downloading';
+    this.state.ollama.modelDetail = `pulling ${missing.join(', ')}`;
+    this.state.ollama.modelProgress = this.computeAggregateModelProgress(requiredModels, tags);
     this.state.ollama.error = `pulling models: ${missing.join(', ')}`;
 
     for (const modelName of missing) {
@@ -156,20 +173,44 @@ class SidecarManager {
 
   pullOllamaModel(ollamaBin, modelName) {
     const child = spawn(ollamaBin, ['pull', modelName], {
-      stdio: ['ignore', 'ignore', 'ignore'],
+      stdio: ['ignore', 'pipe', 'pipe'],
       env: { ...process.env },
       detached: false
     });
     this.ollamaPulls.set(modelName, child);
+    this.ollamaPullProgress.set(modelName, 0);
+    const handleData = (chunk) => {
+      const text = String(chunk || '').trim();
+      if (!text) return;
+      const pct = this.extractProgressPercent(text);
+      if (Number.isFinite(pct)) {
+        this.ollamaPullProgress.set(modelName, pct);
+        const requiredModels = Array.from(
+          new Set([
+            String(process.env.OLLAMA_MODEL || 'llama3.2:3b').trim(),
+            String(process.env.OLLAMA_EMBED_MODEL || 'nomic-embed-text').trim()
+          ].filter(Boolean))
+        );
+        this.state.ollama.modelPhase = 'downloading';
+        this.state.ollama.modelDetail = `pulling ${modelName}`;
+        this.state.ollama.modelProgress = this.computeAggregateModelProgress(requiredModels);
+      }
+    };
+    child.stdout.on('data', handleData);
+    child.stderr.on('data', handleData);
     child.on('error', () => {
       this.state.ollama.error = `failed to pull model ${modelName}`;
       this.state.ollama.modelReady = false;
+       this.state.ollama.modelPhase = 'error';
+       this.state.ollama.modelDetail = `failed to pull ${modelName}`;
       this.ollamaPulls.delete(modelName);
     });
     child.on('exit', async (code, signal) => {
       this.ollamaPulls.delete(modelName);
       if (code && code !== 0) {
         this.state.ollama.modelReady = false;
+        this.state.ollama.modelPhase = 'error';
+        this.state.ollama.modelDetail = `pull failed: ${modelName}`;
         this.state.ollama.error = `model pull failed (${modelName}) code ${code}${signal ? ` signal ${signal}` : ''}`;
         return;
       }
@@ -182,8 +223,48 @@ class SidecarManager {
       const next = await this.fetchOllamaTags();
       const ready = requiredModels.every((required) => this.ollamaModelExists(next, required));
       this.state.ollama.modelReady = ready;
-      this.state.ollama.error = ready ? '' : `waiting for models: ${requiredModels.join(', ')}`;
+      if (ready) {
+        this.state.ollama.modelPhase = 'ready';
+        this.state.ollama.modelDetail = '';
+        this.state.ollama.modelProgress = 100;
+        this.state.ollama.error = '';
+      } else {
+        this.state.ollama.modelPhase = 'downloading';
+        this.state.ollama.modelDetail = `waiting for ${requiredModels.join(', ')}`;
+        this.state.ollama.modelProgress = this.computeAggregateModelProgress(requiredModels, next);
+        this.state.ollama.error = `waiting for models: ${requiredModels.join(', ')}`;
+      }
     });
+  }
+
+  extractProgressPercent(text) {
+    const value = String(text || '');
+    const percentMatches = value.match(/(\d{1,3})\s*%/g);
+    if (!percentMatches || !percentMatches.length) return NaN;
+    let maxSeen = NaN;
+    for (const match of percentMatches) {
+      const m = String(match).match(/(\d{1,3})/);
+      const n = Number(m?.[1]);
+      if (!Number.isFinite(n)) continue;
+      const bounded = Math.max(0, Math.min(100, n));
+      if (!Number.isFinite(maxSeen) || bounded > maxSeen) maxSeen = bounded;
+    }
+    return maxSeen;
+  }
+
+  computeAggregateModelProgress(requiredModels, knownTags) {
+    const required = Array.isArray(requiredModels) ? requiredModels.filter(Boolean) : [];
+    if (!required.length) return 0;
+    const tags = Array.isArray(knownTags) ? knownTags : [];
+    let total = 0;
+    for (const modelName of required) {
+      if (this.ollamaModelExists(tags, modelName)) {
+        total += 100;
+        continue;
+      }
+      total += Number(this.ollamaPullProgress.get(modelName) || 0);
+    }
+    return Math.round(total / required.length);
   }
 
   ollamaModelExists(tags, modelName) {
@@ -255,6 +336,7 @@ class SidecarManager {
       await this.stopChild(child);
     }
     this.ollamaPulls.clear();
+    this.ollamaPullProgress.clear();
     this.ipfsProcess = null;
     this.ollamaProcess = null;
   }

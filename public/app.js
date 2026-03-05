@@ -553,12 +553,16 @@ function renderDesktopRuntimeStatus(status) {
   if (!els.desktopModelStatus) return;
   const phase = getModelPhase(status);
   const detail = formatModelDetail(status);
+  const progress = getModelProgress(status);
   const label = phase.charAt(0).toUpperCase() + phase.slice(1);
-  els.desktopModelStatus.textContent = `Model: ${label}${detail ? ` (${detail})` : ""}`;
+  const progressText = phase === "downloading" && Number.isFinite(progress) ? ` ${progress}%` : "";
+  els.desktopModelStatus.textContent = `Model: ${label}${progressText}${detail ? ` (${detail})` : ""}`;
 }
 
 function getModelPhase(status) {
   const ollama = status?.sidecars?.ollama || {};
+  const explicit = String(ollama.modelPhase || "").toLowerCase().trim();
+  if (explicit) return explicit;
   const error = String(ollama.error || "").toLowerCase();
   if (!ollama.available) return "unavailable";
   if (!ollama.running) return "offline";
@@ -568,8 +572,16 @@ function getModelPhase(status) {
   return "checking";
 }
 
+function getModelProgress(status) {
+  const value = Number(status?.sidecars?.ollama?.modelProgress);
+  if (!Number.isFinite(value)) return NaN;
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
 function formatModelDetail(status) {
   const ollama = status?.sidecars?.ollama || {};
+  const explicit = String(ollama.modelDetail || "").trim();
+  if (explicit) return explicit;
   const error = String(ollama.error || "").trim();
   if (!error) return "";
   if (error.toLowerCase().startsWith("pulling models:")) {
@@ -595,7 +607,9 @@ function maybeNotifyModelStatus(status) {
     return;
   }
   if (phase === "downloading") {
-    pushToast(`Downloading model${detail ? `: ${detail}` : "..."}`, "info");
+    const progress = getModelProgress(status);
+    const pct = Number.isFinite(progress) ? ` (${progress}%)` : "";
+    pushToast(`Downloading model${pct}${detail ? `: ${detail}` : ""}`, "info");
     return;
   }
   if (phase === "ready") {
