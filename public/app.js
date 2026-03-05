@@ -274,8 +274,9 @@ async function loadSetup() {
     state.ipnsKeys = Array.isArray(data.ipfs?.keys) ? data.ipfs.keys : [];
     renderIpnsKeyOptions();
     const profile = getActiveProfile();
-    if (profile && (!profile.ipnsKey || profile.ipnsKey === "self") && state.ipnsKeys.length > 0) {
-      profile.ipnsKey = state.ipnsKeys[0].name;
+    const preferredIpnsKey = getPreferredIpnsKeyName();
+    if (profile && (!profile.ipnsKey || profile.ipnsKey === "self") && preferredIpnsKey) {
+      profile.ipnsKey = preferredIpnsKey;
       applyActiveProfileToForm();
       persistProfiles();
     }
@@ -689,8 +690,9 @@ async function fetchIpnsKeys() {
     state.ipnsKeys = data.keys || [];
     renderIpnsKeyOptions();
     const profile = getActiveProfile();
-    if (profile && (!profile.ipnsKey || profile.ipnsKey === "self") && state.ipnsKeys.length > 0) {
-      profile.ipnsKey = state.ipnsKeys[0].name;
+    const preferredIpnsKey = getPreferredIpnsKeyName();
+    if (profile && (!profile.ipnsKey || profile.ipnsKey === "self") && preferredIpnsKey) {
+      profile.ipnsKey = preferredIpnsKey;
       applyActiveProfileToForm();
       persistProfiles();
     }
@@ -828,7 +830,9 @@ function renderIdentityIndicators() {
 
   const didLoaded = Boolean(profile.userDid);
   const encLoaded = Boolean(profile.encryptionPublicJwk && profile.encryptionPrivateJwk);
-  const ipnsLoaded = Boolean(profile.ipnsKey && profile.ipnsKey.trim());
+  const currentIpns = String(profile.ipnsKey || "").trim();
+  const ipnsLoaded = Boolean(currentIpns && currentIpns !== "self");
+  const hasUsableIpnsKeys = listUsableIpnsKeys().length > 0;
 
   els.didStatus.textContent = didLoaded ? "DID LOADED" : "DID MISSING";
   els.didStatus.className = `status ${didLoaded ? "working" : "error"}`;
@@ -838,9 +842,23 @@ function renderIdentityIndicators() {
   els.encStatus.className = `status ${encLoaded ? "working" : "error"}`;
   els.generateEncKeys.hidden = !didLoaded || encLoaded;
 
-  els.ipnsStatus.textContent = ipnsLoaded ? "KEY LOADED" : "KEY MISSING";
+  els.ipnsStatus.textContent = ipnsLoaded
+    ? "KEY LOADED"
+    : hasUsableIpnsKeys
+      ? "SELECT KEY"
+      : "KEY MISSING";
   els.ipnsStatus.className = `status ${ipnsLoaded ? "working" : "error"}`;
   els.createKey.hidden = ipnsLoaded;
+}
+
+function listUsableIpnsKeys() {
+  return (Array.isArray(state.ipnsKeys) ? state.ipnsKeys : []).filter((key) => String(key?.name || "").trim() && key.name !== "self");
+}
+
+function getPreferredIpnsKeyName() {
+  const usable = listUsableIpnsKeys();
+  if (!usable.length) return "";
+  return String(usable[0].name || "").trim();
 }
 
 function loadProfiles() {
