@@ -123,8 +123,8 @@ class SidecarManager {
     await fs.mkdir(modelsPath, { recursive: true });
     try {
       await this.ensureExecutable(ollamaBin);
-      const bundledSupportsServe = await this.binarySupportsServe(ollamaBin);
-      if (!bundledSupportsServe) {
+      const bundledServeArgs = await this.detectServeArgs(ollamaBin);
+      if (!bundledServeArgs) {
         throw new Error(
           'ollama binary does not support daemon mode (`serve`). Use the CLI/server binary for this platform in resources/bin.'
         );
@@ -134,7 +134,7 @@ class SidecarManager {
         OLLAMA_MODELS: modelsPath,
         OLLAMA_HOST: '127.0.0.1:11434'
       };
-      await this.launchOllamaAndWait(ollamaBin, ['serve'], env);
+      await this.launchOllamaAndWait(ollamaBin, bundledServeArgs, env);
       this.state.ollama = { ...this.state.ollama, available: true, running: true, source: 'bundled', error: '' };
       await this.ensureOllamaModels(ollamaBin);
     } catch (error) {
@@ -159,11 +159,12 @@ class SidecarManager {
     const candidates = await this.resolveSystemOllamaCandidates();
     for (const candidate of candidates) {
       try {
-        if (!(await this.binarySupportsServe(candidate))) {
+        const serveArgs = await this.detectServeArgs(candidate);
+        if (!serveArgs) {
           continue;
         }
         const env = { ...process.env, OLLAMA_HOST: '127.0.0.1:11434' };
-        await this.launchOllamaAndWait(candidate, ['serve'], env);
+        await this.launchOllamaAndWait(candidate, serveArgs, env);
         this.state.ollama.binaryPath = candidate === 'ollama' ? (this.state.ollama.binaryPath || 'ollama') : candidate;
         return true;
       } catch (_error) {
@@ -618,11 +619,11 @@ class SidecarManager {
       if (!clean) return;
       if (!out.includes(clean)) out.push(clean);
     };
-    add('ollama');
     add(process.env.OLLAMA_BIN);
     add('/opt/homebrew/bin/ollama');
     add('/usr/local/bin/ollama');
     add('/Applications/Ollama.app/Contents/Resources/ollama');
+    add('ollama');
     const existing = [];
     for (const candidate of out) {
       if (candidate === 'ollama') {
@@ -639,14 +640,23 @@ class SidecarManager {
     return existing;
   }
 
-  async binarySupportsServe(binaryPath) {
+  async detectServeArgs(binaryPath) {
     const candidate = String(binaryPath || '').trim();
-    if (!candidate) return false;
+    if (!candidate) return null;
     try {
-      const help = await this.execFileSafe(candidate, ['--help'], 5000);
-      return /\bserve\b/i.test(String(help || ''));
+      await this.execFileSafe(candidate, ['serve', '--help'], 5000);
+      return ['serve'];
+    } catch (error) {
+      const msg = String(error?.message || '');
+      if (!/use ollama/i.test(msg)) {
+        // keep probing below
+      }
+    }
+    try {
+      await this.execFileSafe(candidate, ['ollama', 'serve', '--help'], 5000);
+      return ['ollama', 'serve'];
     } catch (_error) {
-      return false;
+      return null;
     }
   }
 }
