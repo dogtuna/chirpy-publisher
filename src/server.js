@@ -1315,7 +1315,10 @@ function extractKeywordTags(corpus, existingTags) {
   const weak = new Set([
     'almost', 'here', 'there', 'fired', 'up', 'down', 'good', 'great', 'nice', 'cool', 'awesome', 'amazing',
     'excited', 'today', 'tomorrow', 'yesterday', 'soon', 'really', 'very', 'much', 'more', 'less', 'thing', 'stuff',
-    'post', 'season', 'question'
+    'post', 'season', 'question', 'take', 'takes', 'see', 'soon'
+  ]);
+  const weakBigramParts = new Set([
+    'take', 'takes', 'see', 'watch', 'wanna', 'want', 'going', 'go', 'make', 'made', 'have', 'has', 'had', 'soon'
   ]);
   const boosted = new Set([
     'baseball', 'mlb', 'nfl', 'nba', 'nhl', 'soccer', 'football', 'basketball', 'hockey', 'playoffs', 'opening day',
@@ -1334,6 +1337,7 @@ function extractKeywordTags(corpus, existingTags) {
 
       const next = tokens[i + 1];
       if (!isUsableTagToken(next, stop, weak)) continue;
+      if (weakBigramParts.has(token) || weakBigramParts.has(next)) continue;
       const pair = `${token} ${next}`;
       bigramCounts.set(pair, (bigramCounts.get(pair) || 0) + 1);
     }
@@ -1408,11 +1412,16 @@ function inferContextTags(corpus, namedPhrases) {
   const movieHints = ['movie', 'film', 'cinema', 'box office', 'director'];
   const musicHints = ['song', 'album', 'artist', 'band', 'playlist', 'music'];
   const sportsHints = ['baseball', 'mlb', 'nfl', 'nba', 'nhl', 'soccer', 'football', 'playoffs', 'opening day'];
+  const mlbTeamHints = [
+    'texas rangers', 'new york yankees', 'boston red sox', 'los angeles dodgers', 'chicago cubs', 'san francisco giants',
+    'atlanta braves', 'houston astros', 'philadelphia phillies', 'seattle mariners', 'new york mets'
+  ];
 
   if (tvHints.some((h) => text.includes(h))) out.push('tv');
   if (movieHints.some((h) => text.includes(h))) out.push('movie');
   if (musicHints.some((h) => text.includes(h))) out.push('music');
   if (sportsHints.some((h) => text.includes(h))) out.push('sports');
+  if (mlbTeamHints.some((h) => text.includes(h))) out.push('baseball', 'mlb', 'sports');
 
   // If user asks "fans of <named phrase>?" this is often media fandom; default to tv when medium is otherwise unknown.
   if (!out.includes('tv') && !out.includes('movie') && /\bfans of\b/.test(text) && Array.isArray(namedPhrases) && namedPhrases.length > 0) {
@@ -1436,7 +1445,7 @@ function dropSubsumedTags(tags) {
       if (bigger === lower) return true;
       const lowWords = lower.split(/\s+/).filter(Boolean);
       const bigWords = bigger.split(/\s+/).filter(Boolean);
-      if (lowWords.length <= 1 && lower.length <= 5) return true;
+      if (lowWords.length <= 1 && bigWords.length >= 2) return true;
       if (lowWords.length <= 2 && bigWords.length >= lowWords.length + 2) return true;
       return false;
     });
