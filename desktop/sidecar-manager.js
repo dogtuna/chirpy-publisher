@@ -131,8 +131,11 @@ class SidecarManager {
       try {
         await this.launchOllamaAndWait(ollamaBin, ['serve'], env);
       } catch (error) {
-        if (!/serve command not supported/i.test(String(error?.message || ''))) throw error;
-        await this.launchOllamaLauncherAndWait(ollamaBin, env);
+        const message = String(error?.message || '');
+        if (!/serve command not supported/i.test(message)) throw error;
+        throw new Error(
+          'ollama binary does not support daemon mode (`serve`). Use the CLI/server binary for this platform in resources/bin.'
+        );
       }
       this.state.ollama = { ...this.state.ollama, available: true, running: true, source: 'bundled', error: '' };
       await this.ensureOllamaModels(ollamaBin);
@@ -162,8 +165,9 @@ class SidecarManager {
         try {
           await this.launchOllamaAndWait(candidate, ['serve'], env);
         } catch (error) {
-          if (!/serve command not supported/i.test(String(error?.message || ''))) throw error;
-          await this.launchOllamaLauncherAndWait(candidate, env);
+          const message = String(error?.message || '');
+          if (!/serve command not supported/i.test(message)) throw error;
+          throw new Error('external ollama binary does not support daemon mode (`serve`)');
         }
         this.state.ollama.binaryPath = candidate === 'ollama' ? (this.state.ollama.binaryPath || 'ollama') : candidate;
         return true;
@@ -203,23 +207,6 @@ class SidecarManager {
       }
       return this.ollamaResponding();
     }, 60000, 500);
-  }
-
-  async launchOllamaLauncherAndWait(candidate, env) {
-    // Some Ollama distributions launch the daemon without a "serve" subcommand.
-    // In that mode the process may detach/exit quickly, so we only require API readiness.
-    try {
-      const child = spawn(candidate, [], {
-        stdio: ['ignore', 'ignore', 'ignore'],
-        env: env || { ...process.env, OLLAMA_HOST: '127.0.0.1:11434' },
-        detached: false
-      });
-      child.on('error', () => null);
-      child.unref?.();
-    } catch (_error) {
-      // ignore; readiness check below is authoritative
-    }
-    await this.waitFor(async () => this.ollamaResponding(), 60000, 500);
   }
 
   async ensureOllamaModels(ollamaBin) {
@@ -623,6 +610,9 @@ class SidecarManager {
     if (process.platform === 'darwin' && /signal=SIGKILL/i.test(msg)) {
       return 'ollama blocked by macOS security or invalid binary (SIGKILL). Install/open Ollama.app once or replace bundled binary for this architecture.';
     }
+    if (/does not support daemon mode/i.test(msg)) {
+      return 'ollama binary is a desktop launcher build, not a headless daemon binary. Replace it with the CLI/server binary in resources/bin/<platform-arch>/ollama.';
+    }
     return msg;
   }
 
@@ -637,7 +627,6 @@ class SidecarManager {
     add(process.env.OLLAMA_BIN);
     add('/opt/homebrew/bin/ollama');
     add('/usr/local/bin/ollama');
-    add('/Applications/Ollama.app/Contents/MacOS/Ollama');
     const existing = [];
     for (const candidate of out) {
       if (candidate === 'ollama') {
