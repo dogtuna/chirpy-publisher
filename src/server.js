@@ -1244,30 +1244,52 @@ async function buildSemanticTags({ autoTagEnabled, existingTags, text, blocks, l
   const mediaTitles = extractMediaTitleCandidates(corpus).slice(0, 4);
   const bucketTags = semantic.buckets.length ? semantic.buckets : await inferBucketTags(corpus, namedPhrases);
   const audienceTags = await inferAudienceTags(corpus, bucketTags);
-  const subtopicTags = (semantic.subtopics || []).filter((tag) => !isWeakAudienceTag(tag)).slice(0, 3);
   const entityTags = semantic.entities || [];
-  const ollamaTags = semantic.usedModel ? [] : await generateTagsWithOllama(corpus, manual);
-  const baseHighSignal = normalizeTagList([
+  const highSignal = normalizeTagList([
     ...manual,
     ...namedPhrases,
     ...mediaTitles,
     ...entityTags,
     ...bucketTags,
-    ...audienceTags,
-    ...subtopicTags,
-    ...ollamaTags
+    ...audienceTags
   ]);
+
   const hasStrongSemanticSignal =
-    bucketTags.length >= 1 && (audienceTags.length >= 1 || entityTags.length >= 1 || namedPhrases.length >= 1);
+    bucketTags.length >= 1 && (audienceTags.length >= 1 || entityTags.length >= 1 || mediaTitles.length >= 1 || namedPhrases.length >= 1);
+
+  // Strict audience-first mode:
+  // Keep only who-cares signals (audiences), broad buckets, and concrete entities/titles.
+  const curated = prioritizeAudienceTags(highSignal, { bucketTags, audienceTags, entityTags, mediaTitles, namedPhrases, manual });
+
   const fallbackTags = hasStrongSemanticSignal
     ? []
-    : extractKeywordTags(corpus, [...baseHighSignal]);
-  const merged = normalizeTagList([
-    ...baseHighSignal,
-    ...fallbackTags
-  ]).slice(0, 14);
+    : extractKeywordTags(corpus, [...curated]);
+  const merged = normalizeTagList([...curated, ...fallbackTags]).slice(0, 12);
   const compact = dropSubsumedTags(merged);
   return filterNamedPhraseFragments(compact, [...namedPhrases, ...mediaTitles]).slice(0, 10);
+}
+
+function prioritizeAudienceTags(tags, context) {
+  const list = Array.isArray(tags) ? tags : [];
+  const buckets = new Set(normalizeTagList(context?.bucketTags || []));
+  const audiences = new Set(normalizeTagList(context?.audienceTags || []));
+  const entities = new Set(normalizeTagList([...(context?.entityTags || []), ...(context?.mediaTitles || []), ...(context?.namedPhrases || [])]));
+  const manual = new Set(normalizeTagList(context?.manual || []));
+
+  const ordered = [];
+  for (const tag of list) {
+    const clean = String(tag || '').trim().toLowerCase();
+    if (!clean) continue;
+    if (manual.has(clean) || entities.has(clean) || buckets.has(clean) || audiences.has(clean)) {
+      if (!ordered.includes(clean)) ordered.push(clean);
+    }
+  }
+
+  // Ensure at least one bucket exists for routing.
+  if (!ordered.some((x) => buckets.has(x)) && buckets.size) {
+    ordered.push(...Array.from(buckets));
+  }
+  return normalizeTagList(ordered).slice(0, 10);
 }
 
 async function analyzePostSemantics(corpus) {
