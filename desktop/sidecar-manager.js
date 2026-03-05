@@ -172,6 +172,51 @@ class SidecarManager {
   }
 
   pullOllamaModel(ollamaBin, modelName) {
+    this.pullOllamaModelViaApi(ollamaBin, modelName);
+  }
+
+  async pullOllamaModelViaApi(ollamaBin, modelName) {
+    if (this.ollamaPulls.has(modelName)) return;
+    const controller = new AbortController();
+    this.ollamaPulls.set(modelName, controller);
+    this.ollamaPullProgress.set(modelName, 0);
+    try {
+      const response = await fetch('http://127.0.0.1:11434/api/pull', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: modelName, stream: true }),
+        signal: controller.signal
+      });
+      if (!response.ok || !response.body) {
+        throw new Error(`api pull failed (${response.status})`);
+      }
+
+      await this.consumeNdjsonStream(response.body, (evt) => {
+        const pct = this.progressPercentFromEvent(evt);
+        if (Number.isFinite(pct)) {
+          this.ollamaPullProgress.set(modelName, pct);
+        }
+        const requiredModels = Array.from(
+          new Set([
+            String(process.env.OLLAMA_MODEL || 'llama3.2:3b').trim(),
+            String(process.env.OLLAMA_EMBED_MODEL || 'nomic-embed-text').trim()
+          ].filter(Boolean))
+        );
+        this.state.ollama.modelPhase = 'downloading';
+        this.state.ollama.modelDetail = String(evt?.status || `pulling ${modelName}`);
+        this.state.ollama.modelProgress = this.computeAggregateModelProgress(requiredModels);
+      });
+
+      this.ollamaPulls.delete(modelName);
+      await this.refreshOllamaModelReadyState();
+    } catch (error) {
+      this.ollamaPulls.delete(modelName);
+      if (error?.name === 'AbortError') return;
+      this.pullOllamaModelViaCli(ollamaBin, modelName);
+    }
+  }
+
+  pullOllamaModelViaCli(ollamaBin, modelName) {
     const child = spawn(ollamaBin, ['pull', modelName], {
       stdio: ['ignore', 'pipe', 'pipe'],
       env: { ...process.env },
@@ -235,6 +280,70 @@ class SidecarManager {
         this.state.ollama.error = `waiting for models: ${requiredModels.join(', ')}`;
       }
     });
+  }
+
+  progressPercentFromEvent(evt) {
+    const completed = Number(evt?.completed);
+    const total = Number(evt?.total);
+    if (Number.isFinite(completed) && Number.isFinite(total) && total > 0) {
+      return Math.max(0, Math.min(100, Math.round((completed / total) * 100)));
+    }
+    const status = String(evt?.status || '').toLowerCase();
+    if (status.includes('success')) return 100;
+    return NaN;
+  }
+
+  async consumeNdjsonStream(stream, onEvent) {
+    const decoder = new TextDecoder();
+    let buffer = '';
+    for await (const chunk of stream) {
+      buffer += decoder.decode(chunk, { stream: true });
+      let index = buffer.indexOf('\n');
+      while (index !== -1) {
+        const line = buffer.slice(0, index).trim();
+        buffer = buffer.slice(index + 1);
+        if (line) {
+          try {
+            const parsed = JSON.parse(line);
+            onEvent(parsed);
+          } catch (_error) {
+            // ignore malformed line
+          }
+        }
+        index = buffer.indexOf('\n');
+      }
+    }
+    const tail = buffer.trim();
+    if (!tail) return;
+    try {
+      const parsed = JSON.parse(tail);
+      onEvent(parsed);
+    } catch (_error) {
+      // ignore malformed tail
+    }
+  }
+
+  async refreshOllamaModelReadyState() {
+    const requiredModels = Array.from(
+      new Set([
+        String(process.env.OLLAMA_MODEL || 'llama3.2:3b').trim(),
+        String(process.env.OLLAMA_EMBED_MODEL || 'nomic-embed-text').trim()
+      ].filter(Boolean))
+    );
+    const tags = await this.fetchOllamaTags();
+    const ready = requiredModels.every((required) => this.ollamaModelExists(tags, required));
+    this.state.ollama.modelReady = ready;
+    if (ready) {
+      this.state.ollama.modelPhase = 'ready';
+      this.state.ollama.modelDetail = '';
+      this.state.ollama.modelProgress = 100;
+      this.state.ollama.error = '';
+      return;
+    }
+    this.state.ollama.modelPhase = 'downloading';
+    this.state.ollama.modelDetail = `waiting for ${requiredModels.join(', ')}`;
+    this.state.ollama.modelProgress = this.computeAggregateModelProgress(requiredModels, tags);
+    this.state.ollama.error = `waiting for models: ${requiredModels.join(', ')}`;
   }
 
   extractProgressPercent(text) {
@@ -332,8 +441,9 @@ class SidecarManager {
   async shutdown() {
     await this.stopChild(this.ipfsProcess);
     await this.stopChild(this.ollamaProcess);
-    for (const child of this.ollamaPulls.values()) {
-      await this.stopChild(child);
+    for (const entry of this.ollamaPulls.values()) {
+      if (entry && typeof entry.abort === 'function') entry.abort();
+      else await this.stopChild(entry);
     }
     this.ollamaPulls.clear();
     this.ollamaPullProgress.clear();
