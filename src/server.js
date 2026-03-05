@@ -190,6 +190,55 @@ const protocolSchemas = {
   }
 };
 
+const embeddingCache = new Map();
+const BUCKET_TAXONOMY = [
+  { tag: 'technology', desc: 'software, networking, infrastructure, devices, troubleshooting, engineering' },
+  { tag: 'sports', desc: 'teams, games, seasons, leagues, athletes, competition' },
+  { tag: 'entertainment', desc: 'shows, fandom, pop culture, celebrities, storytelling' },
+  { tag: 'movies', desc: 'films, cinema, directors, actors, movie releases' },
+  { tag: 'tv', desc: 'series, episodes, streaming shows, television discussions' },
+  { tag: 'music', desc: 'songs, albums, artists, production, mixing, performances' },
+  { tag: 'business', desc: 'startups, products, customers, strategy, operations' },
+  { tag: 'finance', desc: 'investing, markets, money, budgeting, revenue' },
+  { tag: 'education', desc: 'teaching, learning, curriculum, students, pedagogy' },
+  { tag: 'health', desc: 'wellness, fitness, mental health, medicine, training' },
+  { tag: 'science', desc: 'research, experiments, studies, scientific findings' },
+  { tag: 'gaming', desc: 'video games, consoles, game development, esports' },
+  { tag: 'lifestyle', desc: 'daily life, hobbies, routines, home projects, personal updates' },
+  { tag: 'travel', desc: 'trips, destinations, flights, hotels, exploration' },
+  { tag: 'food', desc: 'cooking, recipes, restaurants, meals, ingredients' },
+  { tag: 'family', desc: 'parenting, kids, family routines, household life' },
+  { tag: 'news', desc: 'current events, updates, headlines, developments' },
+  { tag: 'general', desc: 'miscellaneous personal thoughts or broad posts without clear domain' }
+];
+
+const AUDIENCE_TAXONOMY = [
+  { tag: 'developers', desc: 'people who build software and write code' },
+  { tag: 'web-developers', desc: 'frontend/backend web app engineers' },
+  { tag: 'network-engineers', desc: 'networking professionals focused on latency, connectivity, routing' },
+  { tag: 'sysadmins', desc: 'system administrators and infrastructure maintainers' },
+  { tag: 'devops', desc: 'deployment, CI/CD, infrastructure automation practitioners' },
+  { tag: 'makers', desc: 'hands-on builders working with tools, prototyping, fabrication' },
+  { tag: '3d-printing', desc: '3d printing hobbyists and professionals using nozzles, filament, STL files' },
+  { tag: 'gardeners', desc: 'people interested in plants, soil, seeds, growing cycles' },
+  { tag: 'movie-fans', desc: 'people interested in films and movie culture' },
+  { tag: 'tv-fans', desc: 'people interested in television series and episodes' },
+  { tag: 'sports-fans', desc: 'people who follow sports teams and games' },
+  { tag: 'baseball-fans', desc: 'people who follow baseball teams, leagues, and seasons' },
+  { tag: 'music-fans', desc: 'listeners, musicians, and music production enthusiasts' },
+  { tag: 'gamers', desc: 'video game players and game community members' },
+  { tag: 'educators', desc: 'teachers, instructional designers, and learning facilitators' },
+  { tag: 'students', desc: 'learners and people studying topics' },
+  { tag: 'startup-founders', desc: 'founders and operators building startups' },
+  { tag: 'product-managers', desc: 'product strategy and roadmap practitioners' },
+  { tag: 'investors', desc: 'people focused on markets and investing' },
+  { tag: 'parents', desc: 'people interested in parenting and family topics' },
+  { tag: 'travelers', desc: 'people interested in travel planning and experiences' },
+  { tag: 'food-lovers', desc: 'people interested in cooking and food culture' },
+  { tag: 'health-fitness', desc: 'people focused on health and training routines' },
+  { tag: 'general', desc: 'broad audience when no clear niche cohort is identifiable' }
+];
+
 app.use(express.json({ limit: '2mb' }));
 
 bootstrap().catch((error) => {
@@ -1239,11 +1288,18 @@ async function buildSemanticTags({ autoTagEnabled, existingTags, text, blocks, l
   if (!autoTagEnabled) return manual;
 
   const corpus = buildTagCorpus(text, blocks, links);
+  const taxonomy = await inferSemanticTaxonomy(corpus);
   const semantic = await analyzePostSemantics(corpus);
   const namedPhrases = extractNamedPhraseTags(corpus).slice(0, 5);
   const mediaTitles = extractMediaTitleCandidates(corpus).slice(0, 4);
-  const bucketTags = semantic.buckets.length ? semantic.buckets : await inferBucketTags(corpus, namedPhrases);
-  const audienceTags = await inferAudienceTags(corpus, bucketTags);
+  const bucketTags = semantic.buckets.length
+    ? semantic.buckets
+    : taxonomy.buckets.length
+      ? taxonomy.buckets
+      : await inferBucketTags(corpus, namedPhrases);
+  const audienceTags = taxonomy.audiences.length
+    ? taxonomy.audiences
+    : await inferAudienceTags(corpus, bucketTags);
   const entityTags = semantic.entities || [];
   const highSignal = normalizeTagList([
     ...manual,
@@ -1493,6 +1549,84 @@ function parseLooseJsonObject(raw) {
   } catch (_error) {
     return null;
   }
+}
+
+async function inferSemanticTaxonomy(corpus) {
+  const text = String(corpus || '').trim();
+  if (!text || text.length < 8) return { buckets: [], audiences: [] };
+  const postVector = await getEmbeddingVector(text.slice(0, 2600));
+  if (!postVector.length) return { buckets: [], audiences: [] };
+
+  const bucketScores = await scoreTaxonomy(postVector, BUCKET_TAXONOMY, 'bucket');
+  const audienceScores = await scoreTaxonomy(postVector, AUDIENCE_TAXONOMY, 'audience');
+
+  const buckets = bucketScores
+    .filter((x) => x.score >= 0.26)
+    .map((x) => x.tag)
+    .filter((x) => x !== 'general')
+    .slice(0, 2);
+  const audiences = audienceScores
+    .filter((x) => x.score >= 0.24)
+    .map((x) => x.tag)
+    .filter((x) => x !== 'general')
+    .slice(0, 3);
+
+  return {
+    buckets: buckets.length ? buckets : ['general'],
+    audiences
+  };
+}
+
+async function scoreTaxonomy(postVector, taxonomy, cachePrefix) {
+  const scored = [];
+  for (const entry of taxonomy) {
+    const key = `${cachePrefix}:${entry.tag}`;
+    let vec = embeddingCache.get(key);
+    if (!Array.isArray(vec) || !vec.length) {
+      vec = await getEmbeddingVector(`${entry.tag}: ${entry.desc}`);
+      if (Array.isArray(vec) && vec.length) embeddingCache.set(key, vec);
+    }
+    if (!Array.isArray(vec) || !vec.length) continue;
+    const score = cosineSimilarity(postVector, vec);
+    scored.push({ tag: entry.tag, score });
+  }
+  return scored.sort((a, b) => b.score - a.score);
+}
+
+async function getEmbeddingVector(input) {
+  const host = String(process.env.OLLAMA_HOST || 'http://127.0.0.1:11434').trim();
+  const model = String(process.env.OLLAMA_EMBED_MODEL || 'nomic-embed-text').trim();
+  try {
+    const response = await fetch(`${host}/api/embeddings`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model,
+        prompt: String(input || '').slice(0, 3200)
+      })
+    });
+    if (!response.ok) return [];
+    const data = await response.json();
+    return Array.isArray(data?.embedding) ? data.embedding : [];
+  } catch (_error) {
+    return [];
+  }
+}
+
+function cosineSimilarity(a, b) {
+  if (!Array.isArray(a) || !Array.isArray(b) || !a.length || a.length !== b.length) return 0;
+  let dot = 0;
+  let magA = 0;
+  let magB = 0;
+  for (let i = 0; i < a.length; i += 1) {
+    const x = Number(a[i]) || 0;
+    const y = Number(b[i]) || 0;
+    dot += x * y;
+    magA += x * x;
+    magB += y * y;
+  }
+  if (!magA || !magB) return 0;
+  return dot / (Math.sqrt(magA) * Math.sqrt(magB));
 }
 
 function buildTagCorpus(text, blocks, links) {
