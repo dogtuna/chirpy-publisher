@@ -1297,6 +1297,7 @@ async function buildSemanticTags({ autoTagEnabled, existingTags, text, blocks, l
   const bucketTag = normalizeTagList([semantic.bucket]).filter((x) => MODEL_BUCKETS.includes(x));
   const audienceTag = normalizeTagList([semantic.audience]).filter((x) => MODEL_AUDIENCES.includes(x));
   const subtopics = normalizeTagList([...(semantic.subtopics || []), ...inferredNiches])
+    .filter((x) => isSubtopicConsistentWithBucket(x, semantic.bucket, corpus))
     .filter((x) => !isWeakAudienceTag(x))
     .slice(0, 4);
   const entities = normalizeTagList(semantic.entities || []).filter((x) => !isWeakTag(x)).slice(0, 2);
@@ -1413,6 +1414,7 @@ async function inferNicheDepthTags(corpus, bucket, audience) {
     '- if sports context exists, include sport type and team/league/franchise where relevant.',
     '- if entertainment context exists, include medium + title/franchise when relevant.',
     '- if technology context exists, include domain + platform/protocol/tool when relevant.',
+    '- do not infer motorsports from the word "drivers" unless explicit race context is present.',
     `Selected top-level bucket: ${String(bucket || 'general')}`,
     `Selected audience: ${String(audience || 'general')}`,
     'Post:',
@@ -1448,6 +1450,28 @@ async function inferNicheDepthTags(corpus, bucket, audience) {
   } catch (_error) {
     return [];
   }
+}
+
+function isSubtopicConsistentWithBucket(subtopic, bucket, corpus) {
+  const tag = String(subtopic || '').toLowerCase().trim();
+  const top = String(bucket || '').toLowerCase().trim();
+  const text = String(corpus || '').toLowerCase();
+  if (!tag || !top) return true;
+
+  if (top === 'technology') {
+    const motorsportTags = ['formula 1', 'car racing', 'racing drivers', 'motorsport', 'grand prix', 'f1'];
+    const motorsportCues = ['formula 1', 'f1', 'grand prix', 'pit lane', 'race track', 'lap time'];
+    const techDriverCues = [
+      'driver', 'drivers', 'device', 'firmware', 'kernel', 'gpu', 'crash', 'crashes',
+      'latency', 'connection', 'install', 'update'
+    ];
+    const looksMotorsport = motorsportTags.some((x) => tag.includes(x));
+    const hasMotorsportCue = motorsportCues.some((x) => text.includes(x));
+    const hasTechCue = techDriverCues.some((x) => text.includes(x));
+    if (looksMotorsport && hasTechCue && !hasMotorsportCue) return false;
+  }
+
+  return true;
 }
 
 function coerceAllowedTag(value, allowed) {
