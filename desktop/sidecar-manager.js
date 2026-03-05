@@ -175,7 +175,7 @@ class SidecarManager {
     // macOS app fallback: launch GUI app and wait for local API
     if (process.platform === 'darwin') {
       try {
-        await this.execFileSafe('open', ['-a', 'Ollama'], 8000);
+        await this.execFileSafe('open', ['-g', '-j', '-a', 'Ollama'], 8000);
         await this.waitFor(async () => this.ollamaResponding(), 60000, 500);
         this.state.ollama.binaryPath = this.state.ollama.binaryPath || '/Applications/Ollama.app';
         return true;

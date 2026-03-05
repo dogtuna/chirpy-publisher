@@ -55,6 +55,18 @@ function createWindow() {
       sandbox: true
     }
   });
+  mainWindow.webContents.on('did-fail-load', async () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    try {
+      await mainWindow.loadURL(`${SERVER_URL}/`);
+      setTimeout(() => {
+        if (!mainWindow || mainWindow.isDestroyed()) return;
+        mainWindow.loadURL(`${SERVER_URL}/chirpspace.html`).catch(() => null);
+      }, 1500);
+    } catch (_error) {
+      // no-op
+    }
+  });
   mainWindow.loadURL(`${SERVER_URL}/chirpspace.html`);
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
