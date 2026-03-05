@@ -45,6 +45,7 @@ const els = {
   toastStack: document.getElementById("toastStack"),
   userDid: document.getElementById("userDid"),
   ipnsKey: document.getElementById("ipnsKey"),
+  ipnsHelpText: document.getElementById("ipnsHelpText"),
   tags: document.getElementById("tags"),
   visibility: document.getElementById("visibility"),
   visibilityHint: document.getElementById("visibilityHint"),
@@ -849,6 +850,13 @@ function renderIdentityIndicators() {
       : "KEY MISSING";
   els.ipnsStatus.className = `status ${ipnsLoaded ? "working" : "error"}`;
   els.createKey.hidden = ipnsLoaded;
+  if (els.ipnsHelpText) {
+    els.ipnsHelpText.textContent = ipnsLoaded
+      ? `Using "${currentIpns}" for publishing.`
+      : hasUsableIpnsKeys
+        ? "Choose a key from the list above (not \"self\") to finish setup."
+        : "No publishing key yet. Click \"Create IPNS Key\" or \"Refresh IPNS Keys\".";
+  }
 }
 
 function listUsableIpnsKeys() {

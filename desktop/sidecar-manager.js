@@ -63,6 +63,7 @@ class SidecarManager {
     }
 
     try {
+      await this.ensureExecutable(ipfsBin);
       await this.ensureIpfsInitialized(ipfsBin, ipfsPath);
       this.ipfsProcess = spawn(ipfsBin, ['daemon', '--migrate=true'], {
         stdio: ['ignore', 'ignore', 'pipe'],
@@ -113,6 +114,7 @@ class SidecarManager {
     const modelsPath = path.join(this.userDataPath, 'ollama-models');
     await fs.mkdir(modelsPath, { recursive: true });
     try {
+      await this.ensureExecutable(ollamaBin);
       this.ollamaProcess = spawn(ollamaBin, ['serve'], {
         stdio: ['ignore', 'ignore', 'pipe'],
         env: {
@@ -126,7 +128,7 @@ class SidecarManager {
         this.state.ollama.running = false;
       });
 
-      await this.waitFor(async () => this.ollamaResponding(), 20000, 500);
+      await this.waitFor(async () => this.ollamaResponding(), 60000, 500);
       this.state.ollama = { ...this.state.ollama, available: true, running: true, source: 'bundled', error: '' };
       await this.ensureOllamaModels(ollamaBin);
     } catch (error) {
@@ -246,8 +248,8 @@ class SidecarManager {
     child.on('error', () => {
       this.state.ollama.error = `failed to pull model ${modelName}`;
       this.state.ollama.modelReady = false;
-       this.state.ollama.modelPhase = 'error';
-       this.state.ollama.modelDetail = `failed to pull ${modelName}`;
+      this.state.ollama.modelPhase = 'error';
+      this.state.ollama.modelDetail = `failed to pull ${modelName}`;
       this.ollamaPulls.delete(modelName);
     });
     child.on('exit', async (code, signal) => {
@@ -436,6 +438,12 @@ class SidecarManager {
     } catch (_error) {
       // tolerate version-specific config differences
     }
+
+    try {
+      await this.execFileSafe(ipfsBin, ['config', '--bool', 'Discovery.MDNS.Enabled', 'true'], 5000, { IPFS_PATH: ipfsPath });
+    } catch (_error) {
+      // tolerate version-specific config differences
+    }
   }
 
   async shutdown() {
@@ -508,6 +516,15 @@ class SidecarManager {
       await new Promise((resolve) => setTimeout(resolve, intervalMs));
     }
     throw new Error('timeout waiting for sidecar');
+  }
+
+  async ensureExecutable(filePath) {
+    if (!filePath || process.platform === 'win32') return;
+    try {
+      await fs.chmod(filePath, 0o755);
+    } catch (_error) {
+      // keep going; spawn will surface real failure
+    }
   }
 }
 
