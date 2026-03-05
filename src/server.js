@@ -1240,10 +1240,10 @@ async function buildSemanticTags({ autoTagEnabled, existingTags, text, blocks, l
 
   const corpus = buildTagCorpus(text, blocks, links);
   const namedPhrases = extractNamedPhraseTags(corpus).slice(0, 5);
-  const contextTags = inferContextTags(corpus, namedPhrases);
+  const bucketTags = await inferBucketTags(corpus, namedPhrases);
   const ollamaTags = await generateTagsWithOllama(corpus, manual);
-  const fallbackTags = extractKeywordTags(corpus, [...manual, ...namedPhrases, ...contextTags]);
-  const merged = normalizeTagList([...manual, ...namedPhrases, ...contextTags, ...ollamaTags, ...fallbackTags]).slice(0, 12);
+  const fallbackTags = extractKeywordTags(corpus, [...manual, ...namedPhrases, ...bucketTags]);
+  const merged = normalizeTagList([...manual, ...namedPhrases, ...bucketTags, ...ollamaTags, ...fallbackTags]).slice(0, 12);
   return dropSubsumedTags(merged).slice(0, 10);
 }
 
@@ -1269,7 +1269,7 @@ async function generateTagsWithOllama(corpus, existingTags) {
     'Generate up to 8 concise content tags as comma-separated words/phrases.',
     'Use lowercase. No hashtags. No numbering. No explanation.',
     'Avoid filler or mood words like: almost, here, fired up, excited, awesome, great, cool.',
-    'Include one medium/domain tag when clear (examples: tv, movie, music, sports, gaming, coding).',
+    'Include one or two broad bucket tags when clear (examples: sports, entertainment, technology, business, lifestyle).',
     `Existing tags: ${existingTags.join(', ') || '(none)'}`,
     'Content:',
     corpus.slice(0, 3000)
@@ -1404,31 +1404,101 @@ function extractNamedPhraseTags(corpus) {
   return out;
 }
 
-function inferContextTags(corpus, namedPhrases) {
+async function inferBucketTags(corpus, namedPhrases) {
   const text = String(corpus || '').toLowerCase();
-  const out = [];
-
-  const tvHints = ['tv', 'show', 'series', 'episode', 'season premiere', 'season finale', 'streaming', 'netflix', 'hulu', 'hbo', 'amc'];
-  const movieHints = ['movie', 'film', 'cinema', 'box office', 'director'];
-  const musicHints = ['song', 'album', 'artist', 'band', 'playlist', 'music'];
-  const sportsHints = ['baseball', 'mlb', 'nfl', 'nba', 'nhl', 'soccer', 'football', 'playoffs', 'opening day'];
-  const mlbTeamHints = [
-    'texas rangers', 'new york yankees', 'boston red sox', 'los angeles dodgers', 'chicago cubs', 'san francisco giants',
-    'atlanta braves', 'houston astros', 'philadelphia phillies', 'seattle mariners', 'new york mets'
+  const allowedBuckets = [
+    'sports',
+    'entertainment',
+    'technology',
+    'business',
+    'finance',
+    'politics',
+    'science',
+    'health',
+    'education',
+    'gaming',
+    'food',
+    'travel',
+    'lifestyle',
+    'family',
+    'news',
+    'music',
+    'movies',
+    'tv',
+    'general'
   ];
 
-  if (tvHints.some((h) => text.includes(h))) out.push('tv');
-  if (movieHints.some((h) => text.includes(h))) out.push('movie');
-  if (musicHints.some((h) => text.includes(h))) out.push('music');
-  if (sportsHints.some((h) => text.includes(h))) out.push('sports');
-  if (mlbTeamHints.some((h) => text.includes(h))) out.push('baseball', 'mlb', 'sports');
+  const fromModel = await inferBucketsWithOllama(text, allowedBuckets);
+  if (fromModel.length) return fromModel.slice(0, 3);
 
-  // If user asks "fans of <named phrase>?" this is often media fandom; default to tv when medium is otherwise unknown.
-  if (!out.includes('tv') && !out.includes('movie') && /\bfans of\b/.test(text) && Array.isArray(namedPhrases) && namedPhrases.length > 0) {
-    out.push('tv');
+  const keywordMap = {
+    sports: ['baseball', 'mlb', 'nfl', 'nba', 'nhl', 'soccer', 'football', 'playoffs', 'opening day', 'team', 'season'],
+    entertainment: ['show', 'series', 'episode', 'streaming', 'celebrity', 'fandom'],
+    technology: ['software', 'app', 'code', 'coding', 'developer', 'ai', 'ipfs', 'electron', 'api', 'javascript', 'node'],
+    business: ['startup', 'company', 'market', 'product', 'sales', 'strategy', 'customer'],
+    finance: ['stocks', 'investing', 'crypto', 'budget', 'money', 'revenue', 'pricing'],
+    politics: ['election', 'policy', 'government', 'senate', 'congress', 'president'],
+    science: ['research', 'study', 'experiment', 'discovery', 'scientist'],
+    health: ['health', 'wellness', 'fitness', 'nutrition', 'doctor', 'mental health'],
+    education: ['learn', 'teaching', 'school', 'course', 'study', 'student'],
+    gaming: ['game', 'gaming', 'xbox', 'playstation', 'nintendo', 'steam'],
+    food: ['recipe', 'cooking', 'restaurant', 'meal', 'kitchen'],
+    travel: ['travel', 'trip', 'flight', 'hotel', 'vacation', 'road trip'],
+    lifestyle: ['daily', 'routine', 'home', 'hobby', 'life'],
+    family: ['family', 'kids', 'parent', 'child'],
+    news: ['breaking', 'update', 'headline', 'report'],
+    music: ['song', 'album', 'playlist', 'artist', 'band'],
+    movies: ['movie', 'film', 'cinema', 'box office', 'director'],
+    tv: ['tv', 'series', 'episode', 'season', 'netflix', 'hulu', 'hbo']
+  };
+
+  const scored = [];
+  for (const [bucket, hints] of Object.entries(keywordMap)) {
+    const score = hints.reduce((acc, hint) => (text.includes(hint) ? acc + 1 : acc), 0);
+    if (score > 0) scored.push([bucket, score]);
   }
 
-  return normalizeTagList(out).slice(0, 3);
+  // If user mentions named media-like titles and no clear bucket, bias toward entertainment.
+  if (!scored.length && Array.isArray(namedPhrases) && namedPhrases.length > 0 && /\bfans of\b/.test(text)) {
+    return ['entertainment', 'tv'];
+  }
+
+  if (!scored.length) return ['general'];
+  return scored.sort((a, b) => b[1] - a[1]).map(([bucket]) => bucket).slice(0, 3);
+}
+
+async function inferBucketsWithOllama(text, allowedBuckets) {
+  if (!text || text.length < 6) return [];
+  const host = String(process.env.OLLAMA_HOST || 'http://127.0.0.1:11434').trim();
+  const model = String(process.env.OLLAMA_MODEL || 'llama3.2:3b').trim();
+  const prompt = [
+    'Classify this post into 1-3 buckets from this exact list only:',
+    allowedBuckets.join(', '),
+    'Return comma-separated bucket names only. No explanation.',
+    'Post:',
+    text.slice(0, 2200)
+  ].join('\n');
+
+  try {
+    const response = await fetch(`${host}/api/generate`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model,
+        prompt,
+        stream: false,
+        options: { temperature: 0.1 }
+      })
+    });
+    if (!response.ok) return [];
+    const data = await response.json();
+    const raw = String(data?.response || '');
+    const normalized = normalizeTagList(raw.split(',').map((x) => x.trim()));
+    const allowed = new Set(allowedBuckets);
+    return normalized.filter((x) => allowed.has(x)).slice(0, 3);
+  } catch (_error) {
+    return [];
+  }
 }
 
 function dropSubsumedTags(tags) {
