@@ -1239,9 +1239,10 @@ async function buildSemanticTags({ autoTagEnabled, existingTags, text, blocks, l
   if (!autoTagEnabled) return manual;
 
   const corpus = buildTagCorpus(text, blocks, links);
+  const namedPhrases = extractNamedPhraseTags(corpus).slice(0, 5);
   const ollamaTags = await generateTagsWithOllama(corpus, manual);
-  const fallbackTags = extractKeywordTags(corpus, manual);
-  return normalizeTagList([...manual, ...ollamaTags, ...fallbackTags]).slice(0, 12);
+  const fallbackTags = extractKeywordTags(corpus, [...manual, ...namedPhrases]);
+  return normalizeTagList([...manual, ...namedPhrases, ...ollamaTags, ...fallbackTags]).slice(0, 12);
 }
 
 function buildTagCorpus(text, blocks, links) {
@@ -1292,7 +1293,8 @@ async function generateTagsWithOllama(corpus, existingTags) {
 }
 
 function extractKeywordTags(corpus, existingTags) {
-  const base = String(corpus || '')
+  const segmented = String(corpus || '').replace(/\n+/g, ' __sep__ ');
+  const base = segmented
     .toLowerCase()
     .replace(/https?:\/\/\S+/g, ' ')
     .replace(/[^a-z0-9\s-]/g, ' ');
@@ -1300,12 +1302,12 @@ function extractKeywordTags(corpus, existingTags) {
     'the', 'and', 'for', 'with', 'this', 'that', 'from', 'into', 'have', 'just', 'your', 'about', 'also', 'were',
     'been', 'will', 'would', 'there', 'their', 'they', 'them', 'then', 'than', 'what', 'when', 'where', 'while',
     'how', 'why', 'you', 'our', 'out', 'too', 'can', 'not', 'are', 'was', 'but', 'its', 'it', 'on', 'of', 'to',
-    'in', 'a', 'an', 'or', 'at', 'by', 'as', 'is', 'im', 'ive', 'we', 'us', 'me', 'my'
+    'in', 'a', 'an', 'or', 'at', 'by', 'as', 'is', 'im', 'ive', 'we', 'us', 'me', 'my', 'any', 'fans'
   ]);
   const weak = new Set([
     'almost', 'here', 'there', 'fired', 'up', 'down', 'good', 'great', 'nice', 'cool', 'awesome', 'amazing',
     'excited', 'today', 'tomorrow', 'yesterday', 'soon', 'really', 'very', 'much', 'more', 'less', 'thing', 'stuff',
-    'post', 'season'
+    'post', 'season', 'question'
   ]);
   const boosted = new Set([
     'baseball', 'mlb', 'nfl', 'nba', 'nhl', 'soccer', 'football', 'basketball', 'hockey', 'playoffs', 'opening day',
@@ -1318,10 +1320,12 @@ function extractKeywordTags(corpus, existingTags) {
 
   for (let i = 0; i < tokens.length; i += 1) {
     const token = tokens[i];
+    if (token === '__sep__') continue;
     if (!isUsableTagToken(token, stop, weak)) continue;
     unigramCounts.set(token, (unigramCounts.get(token) || 0) + 1);
 
     const next = tokens[i + 1];
+    if (next === '__sep__') continue;
     if (!isUsableTagToken(next, stop, weak)) continue;
     const pair = `${token} ${next}`;
     bigramCounts.set(pair, (bigramCounts.get(pair) || 0) + 1);
@@ -1331,10 +1335,12 @@ function extractKeywordTags(corpus, existingTags) {
   const scored = [];
   for (const [term, count] of bigramCounts.entries()) {
     const score = count * 2 + (boosted.has(term) ? 2 : 0);
+    if (score < 2) continue;
     scored.push([term, score]);
   }
   for (const [term, count] of unigramCounts.entries()) {
     const score = count + (boosted.has(term) ? 2 : 0);
+    if (count < 2 && !boosted.has(term)) continue;
     scored.push([term, score]);
   }
 
@@ -1366,6 +1372,26 @@ function normalizeTagList(values) {
   return Array.from(set);
 }
 
+function extractNamedPhraseTags(corpus) {
+  const text = String(corpus || '');
+  if (!text) return [];
+  const out = [];
+  const seen = new Set();
+  const pattern = /\b([A-Z][a-z0-9]+(?:\s+(?:and|of|the|&)\s+[A-Z][a-z0-9]+|\s+[A-Z][a-z0-9]+){1,5})\b/g;
+  let match;
+  while ((match = pattern.exec(text))) {
+    const phrase = String(match[1] || '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toLowerCase();
+    if (!phrase || phrase.length < 5) continue;
+    if (seen.has(phrase)) continue;
+    seen.add(phrase);
+    out.push(phrase);
+  }
+  return out;
+}
+
 function isUsableTagToken(token, stop, weak) {
   if (!token) return false;
   if (token.length < 3 || token.length > 28) return false;
@@ -1379,7 +1405,7 @@ function isWeakTag(tag) {
   const weakTerms = new Set([
     'almost', 'here', 'there', 'fired', 'fired up', 'up', 'down', 'good', 'great', 'nice', 'cool', 'awesome',
     'amazing', 'excited', 'today', 'tomorrow', 'yesterday', 'soon', 'really', 'very', 'much', 'more', 'less',
-    'thing', 'stuff', 'post'
+    'thing', 'stuff', 'post', 'any fans', 'fire any'
   ]);
   const cleaned = String(tag || '').trim().toLowerCase();
   if (!cleaned) return true;
