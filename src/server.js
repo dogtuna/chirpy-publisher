@@ -26,6 +26,8 @@ const OLLAMA_TIMEOUT_MS = Number.parseInt(process.env.CHIRPY_OLLAMA_TIMEOUT_MS |
 const IPFS_API = String(process.env.CHIRPY_IPFS_API || 'http://127.0.0.1:5001').trim();
 const LAN_PRESENCE_PORT = Number.parseInt(process.env.CHIRPY_LAN_PRESENCE_PORT || '47777', 10);
 const LAN_PRESENCE_ADDR = String(process.env.CHIRPY_LAN_PRESENCE_ADDR || '255.255.255.255').trim();
+const LAN_SCAN_ENABLED = String(process.env.CHIRPY_LAN_SCAN_ENABLED || 'true') !== 'false';
+const LAN_SCAN_TIMEOUT_MS = Number.parseInt(process.env.CHIRPY_LAN_SCAN_TIMEOUT_MS || '900', 10);
 const usersFile = path.join(runtimeRoot, 'users.json');
 const instanceFile = path.join(runtimeRoot, 'instance.json');
 
@@ -46,6 +48,8 @@ const presenceState = {
   usersById: new Map(),
   subscriber: null,
   lanSocket: null,
+  scanTimer: null,
+  scanBusy: false,
   heartbeatTimer: null,
   saveTimer: null,
   ipfsReady: false
@@ -701,6 +705,20 @@ app.get('/api/users', (_req, res) => {
   res.json({ ok: true, topic: presenceTopic, users: getOrderedUsers() });
 });
 
+app.get('/api/presence/self', (_req, res) => {
+  const presence = {
+    schema: 'chirpy.presence/1.0.0',
+    id: presenceState.instanceId || '',
+    peerId: presenceState.peerId || '',
+    name: presenceState.nodeName || '',
+    profileDid: presenceState.profileDid || '',
+    profileIpnsKey: presenceState.profileIpnsKey || '',
+    version: '1.0.0',
+    timestamp: new Date().toISOString()
+  };
+  res.json({ ok: true, presence });
+});
+
 app.get('/api/protocol/schemas', (_req, res) => {
   const summary = Object.entries(protocolSchemas).map(([id, schema]) => ({
     id,
@@ -758,6 +776,10 @@ async function bootstrapPresence() {
 
   startLanPresence();
   publishLanHeartbeat().catch(() => null);
+  if (LAN_SCAN_ENABLED) {
+    startLanPeerScanner();
+    scanLanHttpPeers().catch(() => null);
+  }
   if (!presenceState.heartbeatTimer) {
     presenceState.heartbeatTimer = setInterval(() => {
       publishLanHeartbeat().catch(() => null);
@@ -1001,6 +1023,73 @@ async function publishLanHeartbeat() {
   await new Promise((resolve) => {
     presenceState.lanSocket.send(Buffer.from(payload, 'utf8'), LAN_PRESENCE_PORT, LAN_PRESENCE_ADDR, () => resolve());
   });
+}
+
+function startLanPeerScanner() {
+  if (presenceState.scanTimer) return;
+  presenceState.scanTimer = setInterval(() => {
+    scanLanHttpPeers().catch(() => null);
+  }, Math.max(15000, presenceHeartbeatMs));
+}
+
+async function scanLanHttpPeers() {
+  if (presenceState.scanBusy) return;
+  presenceState.scanBusy = true;
+  try {
+    const hosts = collectLanHttpCandidates();
+    if (!hosts.length) return;
+    const concurrency = 24;
+    for (let i = 0; i < hosts.length; i += concurrency) {
+      const batch = hosts.slice(i, i + concurrency);
+      await Promise.all(batch.map((host) => probeLanHttpPeer(host)));
+    }
+  } finally {
+    presenceState.scanBusy = false;
+  }
+}
+
+function collectLanHttpCandidates() {
+  const interfaces = os.networkInterfaces();
+  const candidates = new Set();
+  for (const rows of Object.values(interfaces)) {
+    for (const row of rows || []) {
+      if (!row || row.internal || row.family !== 'IPv4') continue;
+      const ip = String(row.address || '').trim();
+      if (!ip) continue;
+      const parts = ip.split('.');
+      if (parts.length !== 4) continue;
+      const prefix = `${parts[0]}.${parts[1]}.${parts[2]}`;
+      const selfLast = Number(parts[3]);
+      for (let last = 1; last <= 254; last += 1) {
+        if (last === selfLast) continue;
+        candidates.add(`${prefix}.${last}`);
+      }
+    }
+  }
+  return Array.from(candidates);
+}
+
+async function probeLanHttpPeer(host) {
+  try {
+    const response = await fetchJsonWithTimeout(`http://${host}:${PORT}/api/presence/self`, { method: 'GET' }, LAN_SCAN_TIMEOUT_MS);
+    if (!response.ok) return;
+    const data = await response.json();
+    const payload = data?.presence;
+    const validation = validateProtocolPayload('chirpy.presence.v1', payload);
+    if (!validation.valid) return;
+    if (String(payload.id || '') === String(presenceState.instanceId || '')) return;
+    recordUser({
+      id: String(payload.id),
+      peerId: payload.peerId ? String(payload.peerId) : '',
+      name: payload.name ? String(payload.name) : '',
+      profileDid: payload.profileDid ? String(payload.profileDid) : '',
+      profileIpnsKey: payload.profileIpnsKey ? String(payload.profileIpnsKey) : '',
+      source: 'lan-http',
+      timestamp: payload.timestamp
+    });
+  } catch (_error) {
+    // ignore probe failures
+  }
 }
 
 function recordUser({ id, peerId, name, profileDid, profileIpnsKey, source, timestamp }) {

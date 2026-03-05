@@ -5,8 +5,9 @@ const { spawn } = require('child_process');
 const { SidecarManager } = require('./sidecar-manager');
 
 const PORT = Number.parseInt(process.env.PORT || '3020', 10);
-const HOST = '127.0.0.1';
-const SERVER_URL = `http://${HOST}:${PORT}`;
+const LOCAL_HOST = '127.0.0.1';
+const SERVER_BIND_HOST = String(process.env.CHIRPY_SERVER_BIND_HOST || '0.0.0.0').trim() || '0.0.0.0';
+const SERVER_URL = `http://${LOCAL_HOST}:${PORT}`;
 
 let mainWindow = null;
 let serverChild = null;
@@ -72,7 +73,7 @@ async function ensureServerRunning() {
     ...process.env,
     ELECTRON_RUN_AS_NODE: '1',
     PORT: String(PORT),
-    CHIRPY_BIND_HOST: HOST,
+    CHIRPY_BIND_HOST: SERVER_BIND_HOST,
     CHIRPY_IPFS_BIN: ipfsCmd,
     OLLAMA_HOST: 'http://127.0.0.1:11434'
   };
