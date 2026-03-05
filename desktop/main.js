@@ -124,8 +124,8 @@ function installIpcHandlers() {
     if (!nickname) {
       return { ok: false, error: 'Nickname must be 2-40 characters.' };
     }
-    if (interests.length !== 3) {
-      return { ok: false, error: 'Choose exactly 3 interests.' };
+    if (interests.length < 3) {
+      return { ok: false, error: 'Choose at least 3 interests.' };
     }
     const profile = {
       nickname,
@@ -245,7 +245,7 @@ function normalizeInterests(values) {
         .filter(Boolean)
         .map((x) => x.slice(0, 40))
     )
-  ).slice(0, 3);
+  );
 }
 
 async function waitFor(checkFn, timeoutMs, intervalMs) {

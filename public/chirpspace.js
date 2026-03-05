@@ -203,8 +203,8 @@ async function saveDesktopOnboarding() {
     .map((x) => x.trim())
     .filter(Boolean);
 
-  if (interests.length !== 3) {
-    els.onboardingStatus.textContent = "Choose exactly 3 interests.";
+  if (interests.length < 3) {
+    els.onboardingStatus.textContent = "Choose at least 3 interests.";
     return;
   }
 
@@ -299,9 +299,9 @@ async function refreshWalkthroughGate() {
 async function computeWalkthroughChecklist() {
   const items = [];
   const profile = activeViewer();
-  const desktopProfileReady = !window.chirpyDesktop || Boolean(state.desktopProfile?.nickname && (state.desktopProfile?.interests || []).length === 3);
+  const desktopProfileReady = !window.chirpyDesktop || Boolean(state.desktopProfile?.nickname && (state.desktopProfile?.interests || []).length >= 3);
   items.push({
-    label: "Set Chirper nickname and 3 interests",
+    label: "Set Chirper nickname and interests",
     description: "Improves Chirper matching so your feed highlights relevant people and posts.",
     ok: desktopProfileReady
   });

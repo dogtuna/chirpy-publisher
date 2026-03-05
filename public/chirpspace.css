@@ -173,6 +173,10 @@
     padding: 1rem;
 }
 
+.walkthrough-gate.hidden {
+    display: none !important;
+}
+
 .walkthrough-card {
     width: min(760px, 96vw);
     border: 1px solid var(--line);

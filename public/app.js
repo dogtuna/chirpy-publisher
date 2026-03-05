@@ -400,7 +400,7 @@ function isDesktopProfileComplete() {
   if (!window.chirpyDesktop) return true;
   const nickname = String(state.desktopProfile?.nickname || "").trim();
   const interests = Array.isArray(state.desktopProfile?.interests) ? state.desktopProfile.interests : [];
-  return Boolean(nickname && interests.length === 3);
+  return Boolean(nickname && interests.length >= 3);
 }
 
 async function ensureNodeNameStep() {
@@ -480,13 +480,13 @@ async function ensureDesktopProfileStep() {
     .split(",")
     .map((x) => x.trim())
     .filter(Boolean);
-  if (nicknameExisting && interestsExisting.length === 3) {
+  if (nicknameExisting && interestsExisting.length >= 3) {
     return saveDesktopProfile();
   }
 
   const nickname = await askText("Chirper nickname (how you appear in Chirpers)", "My Chirper");
   if (!nickname) return false;
-  const interests = await askText("Set exactly 3 interests, comma separated", "3D printing, electronics, music");
+  const interests = await askText("Set 3 or more interests, comma separated", "3D printing, electronics, music");
   if (!interests) return false;
   if (els.desktopNickname) els.desktopNickname.value = nickname;
   if (els.desktopInterests) els.desktopInterests.value = interests;
@@ -531,8 +531,8 @@ async function saveDesktopProfile() {
     els.desktopProfileStatus.textContent = "Nickname is required.";
     return false;
   }
-  if (interests.length !== 3) {
-    els.desktopProfileStatus.textContent = "Enter exactly 3 interests (comma separated).";
+  if (interests.length < 3) {
+    els.desktopProfileStatus.textContent = "Enter at least 3 interests (comma separated).";
     return false;
   }
 
@@ -557,10 +557,10 @@ function renderDesktopProfileStatus() {
   }
   const nickname = String(state.desktopProfile?.nickname || "").trim();
   const interests = Array.isArray(state.desktopProfile?.interests) ? state.desktopProfile.interests : [];
-  if (nickname && interests.length === 3) {
+  if (nickname && interests.length >= 3) {
     els.desktopProfileStatus.textContent = `Saved as "${nickname}" with ${interests.length} interests.`;
   } else {
-    els.desktopProfileStatus.textContent = "Set nickname + exactly 3 interests to complete setup.";
+    els.desktopProfileStatus.textContent = "Set nickname + at least 3 interests to complete setup.";
   }
 }
 
