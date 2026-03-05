@@ -758,6 +758,12 @@ async function bootstrapPresence() {
 
   startLanPresence();
   publishLanHeartbeat().catch(() => null);
+  if (!presenceState.heartbeatTimer) {
+    presenceState.heartbeatTimer = setInterval(() => {
+      publishLanHeartbeat().catch(() => null);
+      if (presenceState.ipfsReady) publishHeartbeat().catch(() => null);
+    }, Math.max(5000, presenceHeartbeatMs));
+  }
 
   if (!presenceState.ipfsReady) {
     console.warn('[presence] ipfs not available; user list will only include local node');
@@ -766,10 +772,6 @@ async function bootstrapPresence() {
 
   startPresenceSubscriber();
   publishHeartbeat().catch(() => null);
-  presenceState.heartbeatTimer = setInterval(() => {
-    publishHeartbeat().catch(() => null);
-    publishLanHeartbeat().catch(() => null);
-  }, Math.max(5000, presenceHeartbeatMs));
 }
 
 async function maybePublishStage(stageDir, stageId, userDid, ipnsKey) {
