@@ -383,11 +383,9 @@ async function runFirstTimeSetup() {
 
 function isSetupComplete() {
   const profile = getActiveProfile();
-  const nodeNameSet = Boolean(state.nodeName && normalizeNodeNameLocal(state.nodeName));
   const desktopReady = isDesktopProfileComplete();
   if (!profile) return false;
   return Boolean(
-    nodeNameSet &&
     profile.name &&
     profile.userDid &&
     profile.ipnsKey &&

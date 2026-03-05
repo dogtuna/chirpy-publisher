@@ -202,6 +202,10 @@
     border-color: color-mix(in srgb, var(--brand) 40%, #ffffff);
 }
 
+.walkthrough-item.optional {
+    border-style: dashed;
+}
+
 @media (max-width: 760px) {
     .chirpspace-top {
         flex-direction: column;

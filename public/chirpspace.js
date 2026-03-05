@@ -15,7 +15,8 @@ const els = {
   radarList: document.getElementById("radarList"),
   walkthroughGate: document.getElementById("walkthroughGate"),
   walkthroughChecklist: document.getElementById("walkthroughChecklist"),
-  refreshWalkthrough: document.getElementById("refreshWalkthrough")
+  refreshWalkthrough: document.getElementById("refreshWalkthrough"),
+  dismissWalkthrough: document.getElementById("dismissWalkthrough")
 };
 
 const state = {
@@ -76,6 +77,16 @@ function bindControls() {
   }
   if (els.refreshWalkthrough) {
     els.refreshWalkthrough.addEventListener("click", refreshWalkthroughGate);
+  }
+  if (els.dismissWalkthrough) {
+    els.dismissWalkthrough.addEventListener("click", () => {
+      try {
+        sessionStorage.setItem("chirpyWalkthroughDismissed", "1");
+      } catch (_error) {
+        // ignore
+      }
+      if (els.walkthroughGate) els.walkthroughGate.classList.add("hidden");
+    });
   }
 }
 
@@ -259,15 +270,22 @@ async function refreshWalkthroughGate() {
   checklist.forEach((item) => {
     const row = document.createElement("div");
     row.className = `walkthrough-item${item.ok ? " ok" : ""}`;
+    if (item.optional) row.classList.add("optional");
     const status = item.ok ? "DONE" : "TODO";
     row.innerHTML = `
-      <strong>${status}: ${escapeHtml(item.label)}</strong>
+      <strong>${status}: ${escapeHtml(item.label)}${item.optional ? " (optional)" : ""}</strong>
       <div class="sub small">${escapeHtml(item.description || "")}</div>
     `;
     els.walkthroughChecklist.appendChild(row);
   });
-  const allDone = checklist.every((x) => x.ok);
-  els.walkthroughGate.classList.toggle("hidden", allDone);
+  const allDone = checklist.every((x) => x.ok || x.optional);
+  const dismissed = getWalkthroughDismissed();
+  if (allDone) {
+    clearWalkthroughDismissed();
+    els.walkthroughGate.classList.add("hidden");
+    return;
+  }
+  els.walkthroughGate.classList.toggle("hidden", dismissed);
 }
 
 async function computeWalkthroughChecklist() {
@@ -295,7 +313,8 @@ async function computeWalkthroughChecklist() {
   items.push({
     label: "Save a node label",
     description: "Optional device label for your own instance; public identity is based on profile DID.",
-    ok: Boolean(nodeName && nodeName.length >= 3)
+    ok: Boolean(nodeName && nodeName.length >= 3),
+    optional: true
   });
   items.push({
     label: "Create or select an identity profile",
@@ -324,6 +343,22 @@ async function computeWalkthroughChecklist() {
   });
 
   return items;
+}
+
+function getWalkthroughDismissed() {
+  try {
+    return sessionStorage.getItem("chirpyWalkthroughDismissed") === "1";
+  } catch (_error) {
+    return false;
+  }
+}
+
+function clearWalkthroughDismissed() {
+  try {
+    sessionStorage.removeItem("chirpyWalkthroughDismissed");
+  } catch (_error) {
+    // ignore
+  }
 }
 
 function aggregateTagsByDid(posts) {
