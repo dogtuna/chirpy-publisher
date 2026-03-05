@@ -286,12 +286,12 @@ async function loadNodeIdentity() {
     state.nodeName = String(data.nodeName || "").trim();
     els.nodeNameInput.value = state.nodeName;
     els.nodeNameStatus.textContent = state.nodeName
-      ? `Current node name: ${state.nodeName}`
-      : "Set how this node appears on the network.";
+      ? `Current node label: ${state.nodeName}`
+      : "Set an optional label for this installation.";
     state.nodeNameAvailable = null;
     scheduleSetupPrompt();
   } catch (_error) {
-    els.nodeNameStatus.textContent = "Could not load node name right now.";
+    els.nodeNameStatus.textContent = "Could not load node label right now.";
   }
 }
 
@@ -316,7 +316,7 @@ async function checkNodeNameAvailability(name) {
     const data = await resp.json();
     if (!resp.ok || !data.ok) throw new Error(data.reason || data.error || "name check failed");
     state.nodeNameAvailable = Boolean(data.available);
-    els.nodeNameStatus.textContent = data.available ? "Name is available." : "Name is taken by an active node.";
+    els.nodeNameStatus.textContent = data.available ? "Name format looks good." : "Name format is invalid.";
   } catch (error) {
     state.nodeNameAvailable = null;
     els.nodeNameStatus.textContent = `Could not verify name: ${error.message}`;
@@ -341,7 +341,7 @@ async function saveNodeName() {
     state.nodeName = data.nodeName;
     els.nodeNameInput.value = state.nodeName;
     state.nodeNameAvailable = true;
-    els.nodeNameStatus.textContent = `Saved. You appear as "${state.nodeName}" on the network.`;
+    els.nodeNameStatus.textContent = `Saved node label: "${state.nodeName}".`;
     return true;
   } catch (error) {
     els.nodeNameStatus.textContent = `Could not save name: ${error.message}`;
@@ -375,7 +375,7 @@ async function runFirstTimeSetup() {
     await announceNodeProfile();
     await loadUsers();
     scheduleSetupPrompt();
-    alert("Setup complete: node name, profile, DID, IPNS key, and encryption keys are ready.");
+    alert("Setup complete: node label, profile, DID, IPNS key, encryption keys, and Chirper profile are ready.");
   } catch (error) {
     alert(`Setup halted: ${error.message}`);
   }
@@ -412,7 +412,7 @@ async function ensureNodeNameStep() {
     return ok;
   }
   const suggestion = state.nodeName && state.nodeName.startsWith("node-") ? state.nodeName : `node-${safeUuid().slice(0, 8)}`;
-  const name = await askText("Node name (must be unique on active network nodes)", suggestion);
+  const name = await askText("Node label (optional, for this installation)", suggestion);
   if (!name) return false;
   els.nodeNameInput.value = name;
   return saveNodeName();

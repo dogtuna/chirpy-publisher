@@ -97,7 +97,7 @@ On first run, Chirpy automatically opens the Identity panel and requires setup b
 
 It walks through:
 
-1. Node Name (network-visible, uniqueness checked against active nodes)
+1. Node Label (optional, local installation label)
 2. Profile Name (must be unique on your local node only)
 3. DID generation
 4. IPNS key discovery/creation

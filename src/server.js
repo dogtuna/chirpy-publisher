@@ -593,18 +593,13 @@ app.get('/api/network-node/check-name', (req, res) => {
     });
     return;
   }
-  const available = isNodeNameAvailable(candidate);
-  res.json({ ok: true, available, name: candidate, reason: available ? '' : 'Name is already taken by an active node' });
+  res.json({ ok: true, available: true, name: candidate, reason: '' });
 });
 
 app.post('/api/network-node', async (req, res) => {
   const candidate = normalizeNodeName(req.body?.name);
   if (!candidate) {
     res.status(400).json({ ok: false, error: 'invalid name', reason: 'Use 3-40 chars: letters, numbers, spaces, . _ -' });
-    return;
-  }
-  if (!isNodeNameAvailable(candidate)) {
-    res.status(409).json({ ok: false, error: 'name unavailable', reason: 'Name is already taken by an active node' });
     return;
   }
 
@@ -1270,6 +1265,7 @@ async function generateTagsWithOllama(corpus, existingTags) {
   const prompt = [
     'Generate up to 8 concise content tags as comma-separated words/phrases.',
     'Use lowercase. No hashtags. No numbering. No explanation.',
+    'Avoid filler or mood words like: almost, here, fired up, excited, awesome, great, cool.',
     `Existing tags: ${existingTags.join(', ') || '(none)'}`,
     'Content:',
     corpus.slice(0, 3000)
@@ -1304,22 +1300,48 @@ function extractKeywordTags(corpus, existingTags) {
     'the', 'and', 'for', 'with', 'this', 'that', 'from', 'into', 'have', 'just', 'your', 'about', 'also', 'were',
     'been', 'will', 'would', 'there', 'their', 'they', 'them', 'then', 'than', 'what', 'when', 'where', 'while',
     'how', 'why', 'you', 'our', 'out', 'too', 'can', 'not', 'are', 'was', 'but', 'its', 'it', 'on', 'of', 'to',
-    'in', 'a', 'an', 'or', 'at', 'by', 'as', 'is'
+    'in', 'a', 'an', 'or', 'at', 'by', 'as', 'is', 'im', 'ive', 'we', 'us', 'me', 'my'
+  ]);
+  const weak = new Set([
+    'almost', 'here', 'there', 'fired', 'up', 'down', 'good', 'great', 'nice', 'cool', 'awesome', 'amazing',
+    'excited', 'today', 'tomorrow', 'yesterday', 'soon', 'really', 'very', 'much', 'more', 'less', 'thing', 'stuff',
+    'post', 'season'
+  ]);
+  const boosted = new Set([
+    'baseball', 'mlb', 'nfl', 'nba', 'nhl', 'soccer', 'football', 'basketball', 'hockey', 'playoffs', 'opening day',
+    'ai', 'coding', 'music', 'gardening', '3d printing', 'ipfs', 'chirpy'
   ]);
 
-  const counts = new Map();
-  for (const token of base.split(/\s+/)) {
-    if (token.length < 3 || token.length > 28) continue;
-    if (/^\d+$/.test(token)) continue;
-    if (stop.has(token)) continue;
-    counts.set(token, (counts.get(token) || 0) + 1);
+  const tokens = base.split(/\s+/).filter(Boolean);
+  const unigramCounts = new Map();
+  const bigramCounts = new Map();
+
+  for (let i = 0; i < tokens.length; i += 1) {
+    const token = tokens[i];
+    if (!isUsableTagToken(token, stop, weak)) continue;
+    unigramCounts.set(token, (unigramCounts.get(token) || 0) + 1);
+
+    const next = tokens[i + 1];
+    if (!isUsableTagToken(next, stop, weak)) continue;
+    const pair = `${token} ${next}`;
+    bigramCounts.set(pair, (bigramCounts.get(pair) || 0) + 1);
   }
 
   const existing = new Set(normalizeTagList(existingTags));
-  return Array.from(counts.entries())
-    .sort((a, b) => b[1] - a[1])
-    .map(([word]) => word)
-    .filter((word) => !existing.has(word))
+  const scored = [];
+  for (const [term, count] of bigramCounts.entries()) {
+    const score = count * 2 + (boosted.has(term) ? 2 : 0);
+    scored.push([term, score]);
+  }
+  for (const [term, count] of unigramCounts.entries()) {
+    const score = count + (boosted.has(term) ? 2 : 0);
+    scored.push([term, score]);
+  }
+
+  return scored
+    .sort((a, b) => b[1] - a[1] || b[0].length - a[0].length)
+    .map(([term]) => term)
+    .filter((term) => !existing.has(term))
     .slice(0, 6);
 }
 
@@ -1338,9 +1360,34 @@ function normalizeTagList(values) {
       .trim()
       .slice(0, 40);
     if (!clean || clean.length < 2) continue;
+    if (isWeakTag(clean)) continue;
     set.add(clean);
   }
   return Array.from(set);
+}
+
+function isUsableTagToken(token, stop, weak) {
+  if (!token) return false;
+  if (token.length < 3 || token.length > 28) return false;
+  if (/^\d+$/.test(token)) return false;
+  if (stop.has(token)) return false;
+  if (weak.has(token)) return false;
+  return true;
+}
+
+function isWeakTag(tag) {
+  const weakTerms = new Set([
+    'almost', 'here', 'there', 'fired', 'fired up', 'up', 'down', 'good', 'great', 'nice', 'cool', 'awesome',
+    'amazing', 'excited', 'today', 'tomorrow', 'yesterday', 'soon', 'really', 'very', 'much', 'more', 'less',
+    'thing', 'stuff', 'post'
+  ]);
+  const cleaned = String(tag || '').trim().toLowerCase();
+  if (!cleaned) return true;
+  if (weakTerms.has(cleaned)) return true;
+  const words = cleaned.split(/\s+/);
+  if (words.length === 1 && words[0].length <= 3 && !['mlb', 'nfl', 'nba', 'nhl', 'ai'].includes(words[0])) return true;
+  if (words.every((w) => weakTerms.has(w))) return true;
+  return false;
 }
 
 function sanitizeIpnsKeyName(value) {
@@ -1455,21 +1502,6 @@ function normalizeNodeName(value) {
   if (raw.length < 3 || raw.length > 40) return '';
   if (!/^[a-zA-Z0-9._ -]+$/.test(raw)) return '';
   return raw;
-}
-
-function isNodeNameAvailable(name) {
-  const candidate = String(name || '').trim().toLowerCase();
-  if (!candidate) return false;
-  const now = Date.now();
-
-  for (const user of presenceState.usersById.values()) {
-    if (!user?.name) continue;
-    if (String(user.name).trim().toLowerCase() !== candidate) continue;
-    if (user.id === presenceState.instanceId) continue;
-    const seen = Date.parse(String(user.lastActivity || ''));
-    if (Number.isFinite(seen) && now - seen <= presenceStaleMs) return false;
-  }
-  return true;
 }
 
 function toIsoTimestamp(value) {

@@ -293,8 +293,8 @@ async function computeWalkthroughChecklist() {
   }
 
   items.push({
-    label: "Save a unique node name",
-    description: "This is your node identity on the network so others can distinguish your instance.",
+    label: "Save a node label",
+    description: "Optional device label for your own instance; public identity is based on profile DID.",
     ok: Boolean(nodeName && nodeName.length >= 3)
   });
   items.push({
