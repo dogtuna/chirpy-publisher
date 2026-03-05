@@ -516,6 +516,10 @@ app.post('/stage', upload.array('media', 50), async (req, res) => {
       await writeJsonFile(path.join(stageDir, 'manifest.json'), manifest);
     }
 
+    // Re-announce presence after staging so remote nodes get fresh public tag summaries quickly.
+    publishLanHeartbeat().catch(() => null);
+    if (presenceState.ipfsReady) publishHeartbeat().catch(() => null);
+
     await cleanup();
 
     res.json({
@@ -986,24 +990,28 @@ async function buildPresencePayload() {
 
 async function collectPublicTagsForDid(did) {
   const targetDid = String(did || '').trim();
-  if (!targetDid) return [];
   try {
     const entries = await fs.readdir(stageRoot, { withFileTypes: true });
     const directories = entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
-    const seen = new Set();
+    const seenExact = new Set();
+    const seenAny = new Set();
     for (const stageId of directories) {
       const record = await loadChirpSpacePost(stageId);
       if (!record) continue;
       if (record.visibility !== 'public') continue;
-      if (String(record.userDid || '').trim() !== targetDid) continue;
       const tags = Array.isArray(record.tags) ? record.tags : [];
       for (const tag of tags) {
         const clean = String(tag || '').trim().toLowerCase();
-        if (clean) seen.add(clean);
+        if (!clean) continue;
+        seenAny.add(clean);
+        if (targetDid && String(record.userDid || '').trim() === targetDid) {
+          seenExact.add(clean);
+        }
       }
-      if (seen.size >= 8) break;
+      if (seenAny.size >= 16 && (!targetDid || seenExact.size >= 8)) break;
     }
-    return Array.from(seen).slice(0, 8);
+    if (targetDid && seenExact.size > 0) return Array.from(seenExact).slice(0, 8);
+    return Array.from(seenAny).slice(0, 8);
   } catch (_error) {
     return [];
   }
