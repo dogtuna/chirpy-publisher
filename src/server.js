@@ -4,7 +4,6 @@ const fs = require('fs/promises');
 const os = require('os');
 const crypto = require('crypto');
 const { spawn, execFile } = require('child_process');
-const readline = require('readline');
 const multer = require('multer');
 const sharp = require('sharp');
 
@@ -23,6 +22,7 @@ const publishTopic = process.env.CHIRPY_PUBSUB_TOPIC || 'chirpy.new-post';
 const presenceHeartbeatMs = Number.parseInt(process.env.CHIRPY_PRESENCE_HEARTBEAT_MS || '30000', 10);
 const presenceStaleMs = Number.parseInt(process.env.CHIRPY_PRESENCE_STALE_MS || '300000', 10);
 const OLLAMA_TIMEOUT_MS = Number.parseInt(process.env.CHIRPY_OLLAMA_TIMEOUT_MS || '7000', 10);
+const IPFS_API = String(process.env.CHIRPY_IPFS_API || 'http://127.0.0.1:5001').trim();
 const usersFile = path.join(runtimeRoot, 'users.json');
 const instanceFile = path.join(runtimeRoot, 'instance.json');
 
@@ -783,7 +783,11 @@ async function maybePublishStage(stageDir, stageId, userDid, ipnsKey) {
 
     let pubsubPublished = false;
     try {
-      await runExec(IPFS_CMD, ['pubsub', 'pub', publishTopic, pubPayload], 10000);
+      try {
+        await ipfsPubsubPublish(publishTopic, pubPayload);
+      } catch (_error) {
+        await runExec(IPFS_CMD, ['pubsub', 'pub', publishTopic, pubPayload], 10000);
+      }
       pubsubPublished = true;
     } catch (_error) {
       pubsubPublished = false;
@@ -838,29 +842,67 @@ async function loadPeerId() {
 
 function startPresenceSubscriber() {
   if (presenceState.subscriber) return;
-  const child = spawn(IPFS_CMD, ['pubsub', 'sub', presenceTopic], { stdio: ['ignore', 'pipe', 'pipe'] });
-  presenceState.subscriber = child;
+  const controller = new AbortController();
+  presenceState.subscriber = controller;
 
-  const lines = readline.createInterface({ input: child.stdout });
-  lines.on('line', (line) => {
-    const payload = safeJsonParse(line);
-    const validation = validateProtocolPayload('chirpy.presence.v1', payload);
-    if (!validation.valid) return;
-    recordUser({
-      id: String(payload.id),
-      peerId: payload.peerId ? String(payload.peerId) : '',
-      name: payload.name ? String(payload.name) : '',
-      profileDid: payload.profileDid ? String(payload.profileDid) : '',
-      profileIpnsKey: payload.profileIpnsKey ? String(payload.profileIpnsKey) : '',
-      source: 'pubsub',
-      timestamp: payload.timestamp
-    });
-  });
+  (async () => {
+    try {
+      const query = new URLSearchParams({ arg: presenceTopic });
+      const response = await fetch(`${IPFS_API}/api/v0/pubsub/sub?${query.toString()}`, {
+        method: 'POST',
+        signal: controller.signal
+      });
+      if (!response.ok || !response.body) throw new Error(`pubsub sub failed (${response.status})`);
+      const decoder = new TextDecoder();
+      let buffer = '';
+      for await (const chunk of response.body) {
+        buffer += decoder.decode(chunk, { stream: true });
+        let idx = buffer.indexOf('\n');
+        while (idx !== -1) {
+          const line = buffer.slice(0, idx).trim();
+          buffer = buffer.slice(idx + 1);
+          handlePresencePubsubLine(line);
+          idx = buffer.indexOf('\n');
+        }
+      }
+      handlePresencePubsubLine(buffer.trim());
+    } catch (_error) {
+      // restart below
+    } finally {
+      if (presenceState.subscriber === controller) {
+        presenceState.subscriber = null;
+      }
+      if (presenceState.ipfsReady) setTimeout(startPresenceSubscriber, 5000);
+    }
+  })();
+}
 
-  child.stderr.on('data', () => null);
-  child.on('exit', () => {
-    presenceState.subscriber = null;
-    if (presenceState.ipfsReady) setTimeout(startPresenceSubscriber, 5000);
+function handlePresencePubsubLine(line) {
+  const parsed = safeJsonParse(line);
+  if (!parsed || typeof parsed !== 'object') return;
+  let rawPayload = '';
+  if (typeof parsed.data === 'string' && parsed.data) {
+    try {
+      rawPayload = Buffer.from(parsed.data, 'base64').toString('utf8');
+    } catch (_error) {
+      rawPayload = '';
+    }
+  } else if (typeof parsed.payload === 'string') {
+    rawPayload = parsed.payload;
+  } else if (parsed.schema && parsed.id) {
+    rawPayload = JSON.stringify(parsed);
+  }
+  const payload = safeJsonParse(rawPayload);
+  const validation = validateProtocolPayload('chirpy.presence.v1', payload);
+  if (!validation.valid) return;
+  recordUser({
+    id: String(payload.id),
+    peerId: payload.peerId ? String(payload.peerId) : '',
+    name: payload.name ? String(payload.name) : '',
+    profileDid: payload.profileDid ? String(payload.profileDid) : '',
+    profileIpnsKey: payload.profileIpnsKey ? String(payload.profileIpnsKey) : '',
+    source: 'pubsub',
+    timestamp: payload.timestamp
   });
 }
 
@@ -876,7 +918,11 @@ async function publishHeartbeat() {
     timestamp: new Date().toISOString()
   });
 
-  await runExec(IPFS_CMD, ['pubsub', 'pub', presenceTopic, payload], 10000);
+  try {
+    await ipfsPubsubPublish(presenceTopic, payload);
+  } catch (_error) {
+    await runExec(IPFS_CMD, ['pubsub', 'pub', presenceTopic, payload], 10000);
+  }
 
   recordUser({
     id: presenceState.instanceId,
@@ -887,6 +933,16 @@ async function publishHeartbeat() {
     source: 'self',
     timestamp: new Date().toISOString()
   });
+}
+
+async function ipfsPubsubPublish(topic, payload) {
+  const query = new URLSearchParams();
+  query.append('arg', String(topic || ''));
+  query.append('arg', String(payload || ''));
+  const response = await fetch(`${IPFS_API}/api/v0/pubsub/pub?${query.toString()}`, { method: 'POST' });
+  if (!response.ok) {
+    throw new Error(`ipfs pubsub publish failed (${response.status})`);
+  }
 }
 
 function recordUser({ id, peerId, name, profileDid, profileIpnsKey, source, timestamp }) {
