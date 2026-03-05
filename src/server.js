@@ -240,6 +240,8 @@ const AUDIENCE_TAXONOMY = [
   { tag: 'health-fitness', desc: 'people focused on health and training routines' },
   { tag: 'general', desc: 'broad audience when no clear niche cohort is identifiable' }
 ];
+const MODEL_BUCKETS = BUCKET_TAXONOMY.map((x) => x.tag);
+const MODEL_AUDIENCES = AUDIENCE_TAXONOMY.map((x) => x.tag);
 
 app.use(express.json({ limit: '2mb' }));
 
@@ -1290,42 +1292,77 @@ async function buildSemanticTags({ autoTagEnabled, existingTags, text, blocks, l
   if (!autoTagEnabled) return manual;
 
   const corpus = buildTagCorpus(text, blocks, links);
-  const taxonomy = await inferSemanticTaxonomy(corpus);
-  const semantic = await analyzePostSemantics(corpus);
-  const namedPhrases = extractNamedPhraseTags(corpus).slice(0, 5);
-  const mediaTitles = extractMediaTitleCandidates(corpus).slice(0, 4);
-  const semanticBuckets = normalizeTagList(semantic.buckets || []).filter((x) => x !== 'general');
-  const bucketTags = semanticBuckets.length
-    ? semanticBuckets
-    : taxonomy.buckets.length
-      ? taxonomy.buckets
-      : await inferBucketTags(corpus, namedPhrases);
-  const audienceTags = taxonomy.audiences.length
-    ? taxonomy.audiences
-    : await inferAudienceTags(corpus, bucketTags);
-  const entityTags = normalizeEntityTags({
-    entities: semantic.entities || [],
-    namedPhrases,
-    mediaTitles
-  });
-  const highSignal = normalizeTagList([
+  const semantic = await classifyPostSemanticRoute(corpus);
+  const bucketTag = normalizeTagList([semantic.bucket]).filter((x) => MODEL_BUCKETS.includes(x));
+  const audienceTag = normalizeTagList([semantic.audience]).filter((x) => MODEL_AUDIENCES.includes(x));
+  const subtopics = normalizeTagList(semantic.subtopics || []).filter((x) => !isWeakAudienceTag(x)).slice(0, 3);
+  const entities = normalizeTagList(semantic.entities || []).filter((x) => !isWeakTag(x)).slice(0, 2);
+
+  const merged = normalizeTagList([
     ...manual,
-    ...namedPhrases,
-    ...mediaTitles,
-    ...entityTags,
-    ...bucketTags,
-    ...audienceTags
-  ]);
-
-  // Strict audience-first mode:
-  // Keep only who-cares signals (audiences), broad buckets, and concrete entities/titles.
-  const curated = prioritizeAudienceTags(highSignal, { bucketTags, audienceTags, entityTags, mediaTitles, namedPhrases, manual });
-
-  // Controlled output policy: no freeform phrase fallback tags.
-  const merged = normalizeTagList([...curated]).slice(0, 12);
+    ...bucketTag,
+    ...audienceTag,
+    ...subtopics,
+    ...entities
+  ]).slice(0, 12);
   const compact = dropSubsumedTags(merged);
-  const filtered = filterNamedPhraseFragments(compact, [...namedPhrases, ...mediaTitles]).slice(0, 10);
+  const filtered = compact.slice(0, 10);
   return applyDisambiguationGuards(corpus, filtered);
+}
+
+async function classifyPostSemanticRoute(corpus) {
+  const text = String(corpus || '').trim();
+  if (!text || text.length < 6) {
+    return { bucket: 'general', audience: 'general', subtopics: [], entities: [] };
+  }
+
+  const host = String(process.env.OLLAMA_HOST || 'http://127.0.0.1:11434').trim();
+  const model = String(process.env.OLLAMA_MODEL || 'llama3.2:3b').trim();
+  const prompt = [
+    'You are a semantic router for social posts.',
+    'Task: identify who would care about this post.',
+    'Return strict JSON only with keys: bucket, audience, subtopics, entities.',
+    `bucket: exactly one value from this list: ${MODEL_BUCKETS.join(', ')}`,
+    `audience: exactly one value from this list: ${MODEL_AUDIENCES.join(', ')}`,
+    'subtopics: array of 0-3 concise inferred niche labels (1-3 words each), based on meaning not phrase extraction.',
+    'entities: array of 0-2 proper names/titles/teams/products only when clearly present.',
+    'Rules:',
+    '- infer intent/context (professional, hobby, literal vs metaphorical).',
+    '- do NOT output filler fragments or mood phrases.',
+    '- if uncertain, use "general" and keep subtopics empty.',
+    'Post:',
+    text.slice(0, 2800)
+  ].join('\n');
+
+  try {
+    const response = await fetch(`${host}/api/generate`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model,
+        prompt,
+        stream: false,
+        format: 'json',
+        options: { temperature: 0.1 }
+      })
+    });
+    if (!response.ok) {
+      return { bucket: 'general', audience: 'general', subtopics: [], entities: [] };
+    }
+    const data = await response.json();
+    const parsed = parseLooseJsonObject(String(data?.response || '').trim());
+    const bucket = normalizeTagList([parsed?.bucket]).find((x) => MODEL_BUCKETS.includes(x)) || 'general';
+    const audience = normalizeTagList([parsed?.audience]).find((x) => MODEL_AUDIENCES.includes(x)) || 'general';
+    const subtopics = normalizeTagList(Array.isArray(parsed?.subtopics) ? parsed.subtopics : [])
+      .filter((x) => !isWeakAudienceTag(x))
+      .slice(0, 3);
+    const entities = normalizeTagList(Array.isArray(parsed?.entities) ? parsed.entities : [])
+      .filter((x) => !isWeakTag(x))
+      .slice(0, 2);
+    return { bucket, audience, subtopics, entities };
+  } catch (_error) {
+    return { bucket: 'general', audience: 'general', subtopics: [], entities: [] };
+  }
 }
 
 function prioritizeAudienceTags(tags, context) {
@@ -2136,6 +2173,13 @@ function isWeakTag(tag) {
 function isWeakAudienceTag(tag) {
   const value = String(tag || '').toLowerCase();
   if (!value) return true;
+  if (value.length < 3 || value.length > 36) return true;
+  if (/[^a-z0-9\s-]/.test(value)) return true;
+  const words = value.split(/\s+/).filter(Boolean);
+  if (words.length > 3) return true;
+  const weakStarters = new Set(['any', 'anyone', 'someone', 'just', 'need', 'going', 'go', 'back', 'still']);
+  if (words.length && weakStarters.has(words[0])) return true;
+  if (words.some((w) => ['this', 'that', 'here', 'there', 'really', 'very'].includes(w))) return true;
   const disallowed = new Set([
     'hours troubleshooting',
     'finally solid',
