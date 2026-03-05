@@ -1241,22 +1241,30 @@ async function buildSemanticTags({ autoTagEnabled, existingTags, text, blocks, l
   const corpus = buildTagCorpus(text, blocks, links);
   const semantic = await analyzePostSemantics(corpus);
   const namedPhrases = extractNamedPhraseTags(corpus).slice(0, 5);
+  const mediaTitles = extractMediaTitleCandidates(corpus).slice(0, 4);
   const bucketTags = semantic.buckets.length ? semantic.buckets : await inferBucketTags(corpus, namedPhrases);
   const subtopicTags = semantic.subtopics || [];
   const entityTags = semantic.entities || [];
   const ollamaTags = semantic.usedModel ? [] : await generateTagsWithOllama(corpus, manual);
-  const fallbackTags = extractKeywordTags(corpus, [...manual, ...namedPhrases, ...bucketTags, ...subtopicTags, ...entityTags]);
-  const merged = normalizeTagList([
+  const baseHighSignal = normalizeTagList([
     ...manual,
     ...namedPhrases,
+    ...mediaTitles,
     ...entityTags,
     ...bucketTags,
     ...subtopicTags,
-    ...ollamaTags,
+    ...ollamaTags
+  ]);
+  const hasStrongSemanticSignal = baseHighSignal.length >= 2 && bucketTags.length >= 1;
+  const fallbackTags = hasStrongSemanticSignal
+    ? []
+    : extractKeywordTags(corpus, [...baseHighSignal]);
+  const merged = normalizeTagList([
+    ...baseHighSignal,
     ...fallbackTags
   ]).slice(0, 14);
   const compact = dropSubsumedTags(merged);
-  return filterNamedPhraseFragments(compact, namedPhrases).slice(0, 10);
+  return filterNamedPhraseFragments(compact, [...namedPhrases, ...mediaTitles]).slice(0, 10);
 }
 
 async function analyzePostSemantics(corpus) {
@@ -1307,6 +1315,7 @@ async function analyzePostSemantics(corpus) {
         model,
         prompt,
         stream: false,
+        format: 'json',
         options: { temperature: 0.1 }
       })
     });
@@ -1324,8 +1333,12 @@ async function analyzePostSemantics(corpus) {
     const buckets = normalizeTagList(Array.isArray(parsed.buckets) ? parsed.buckets : [])
       .filter((x) => allowed.has(x))
       .slice(0, 3);
-    const subtopics = normalizeTagList(Array.isArray(parsed.subtopics) ? parsed.subtopics : []).slice(0, 5);
-    const entities = normalizeTagList(Array.isArray(parsed.entities) ? parsed.entities : []).slice(0, 5);
+    const subtopics = normalizeTagList(Array.isArray(parsed.subtopics) ? parsed.subtopics : [])
+      .filter((x) => !isWeakTag(x))
+      .slice(0, 5);
+    const entities = normalizeTagList(Array.isArray(parsed.entities) ? parsed.entities : [])
+      .filter((x) => !isWeakTag(x))
+      .slice(0, 5);
     return { usedModel: true, buckets, subtopics, entities };
   } catch (_error) {
     return { usedModel: false, buckets: [], subtopics: [], entities: [] };
@@ -1509,6 +1522,34 @@ function extractNamedPhraseTags(corpus) {
   return out;
 }
 
+function extractMediaTitleCandidates(corpus) {
+  const text = String(corpus || '');
+  if (!text) return [];
+  const out = [];
+  const seen = new Set();
+  const rules = [
+    /\b(?:new|upcoming)\s+([a-z0-9][a-z0-9\s:'-]{2,40}?)\s+(?:movie|film|show|series)\b/gi,
+    /\bfans of\s+([a-z0-9][a-z0-9\s:'-]{2,40})\??/gi,
+    /"([^"]{3,60})"/g
+  ];
+  for (const rule of rules) {
+    let m;
+    while ((m = rule.exec(text))) {
+      const phrase = String(m[1] || '')
+        .toLowerCase()
+        .replace(/[^a-z0-9\s'-]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (!phrase || phrase.length < 4) continue;
+      if (/\b(movie|film|show|series)\b/.test(phrase)) continue;
+      if (seen.has(phrase)) continue;
+      seen.add(phrase);
+      out.push(phrase);
+    }
+  }
+  return out;
+}
+
 async function inferBucketTags(corpus, namedPhrases) {
   const text = String(corpus || '').toLowerCase();
   const allowedBuckets = [
@@ -1539,7 +1580,10 @@ async function inferBucketTags(corpus, namedPhrases) {
   const keywordMap = {
     sports: ['baseball', 'mlb', 'nfl', 'nba', 'nhl', 'soccer', 'football', 'playoffs', 'opening day', 'team', 'season'],
     entertainment: ['show', 'series', 'episode', 'streaming', 'celebrity', 'fandom'],
-    technology: ['software', 'app', 'code', 'coding', 'developer', 'ai', 'ipfs', 'electron', 'api', 'javascript', 'node'],
+    technology: [
+      'software', 'app', 'code', 'coding', 'developer', 'ai', 'ipfs', 'electron', 'api', 'javascript', 'node',
+      'troubleshooting', 'connection', 'latency', 'network', 'bridge', 'connectivity', 'packet', 'router', 'wifi'
+    ],
     business: ['startup', 'company', 'market', 'product', 'sales', 'strategy', 'customer'],
     finance: ['stocks', 'investing', 'crypto', 'budget', 'money', 'revenue', 'pricing'],
     politics: ['election', 'policy', 'government', 'senate', 'congress', 'president'],
@@ -1554,7 +1598,8 @@ async function inferBucketTags(corpus, namedPhrases) {
     news: ['breaking', 'update', 'headline', 'report'],
     music: ['song', 'album', 'playlist', 'artist', 'band'],
     movies: ['movie', 'film', 'cinema', 'box office', 'director'],
-    tv: ['tv', 'series', 'episode', 'season', 'netflix', 'hulu', 'hbo']
+    tv: ['tv', 'series', 'episode', 'season', 'netflix', 'hulu', 'hbo'],
+    movies: ['movie', 'film', 'cinema', 'box office', 'director']
   };
 
   const scored = [];
@@ -1685,6 +1730,7 @@ function isWeakTag(tag) {
   const cleaned = String(tag || '').trim().toLowerCase();
   if (!cleaned) return true;
   if (weakTerms.has(cleaned)) return true;
+  if (/^(anyone|someone|everybody|everyones?)$/.test(cleaned)) return true;
   const words = cleaned.split(/\s+/);
   if (words.length === 1 && words[0].length <= 3 && !['mlb', 'nfl', 'nba', 'nhl', 'ai'].includes(words[0])) return true;
   if (words.every((w) => weakTerms.has(w))) return true;
