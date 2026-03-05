@@ -4,6 +4,7 @@ const fs = require('fs/promises');
 const os = require('os');
 const crypto = require('crypto');
 const { spawn, execFile } = require('child_process');
+const dgram = require('dgram');
 const multer = require('multer');
 const sharp = require('sharp');
 
@@ -23,6 +24,8 @@ const presenceHeartbeatMs = Number.parseInt(process.env.CHIRPY_PRESENCE_HEARTBEA
 const presenceStaleMs = Number.parseInt(process.env.CHIRPY_PRESENCE_STALE_MS || '300000', 10);
 const OLLAMA_TIMEOUT_MS = Number.parseInt(process.env.CHIRPY_OLLAMA_TIMEOUT_MS || '7000', 10);
 const IPFS_API = String(process.env.CHIRPY_IPFS_API || 'http://127.0.0.1:5001').trim();
+const LAN_PRESENCE_PORT = Number.parseInt(process.env.CHIRPY_LAN_PRESENCE_PORT || '47777', 10);
+const LAN_PRESENCE_ADDR = String(process.env.CHIRPY_LAN_PRESENCE_ADDR || '255.255.255.255').trim();
 const usersFile = path.join(runtimeRoot, 'users.json');
 const instanceFile = path.join(runtimeRoot, 'instance.json');
 
@@ -42,6 +45,7 @@ const presenceState = {
   profileIpnsKey: '',
   usersById: new Map(),
   subscriber: null,
+  lanSocket: null,
   heartbeatTimer: null,
   saveTimer: null,
   ipfsReady: false
@@ -752,6 +756,9 @@ async function bootstrapPresence() {
     timestamp: new Date().toISOString()
   });
 
+  startLanPresence();
+  publishLanHeartbeat().catch(() => null);
+
   if (!presenceState.ipfsReady) {
     console.warn('[presence] ipfs not available; user list will only include local node');
     return;
@@ -761,6 +768,7 @@ async function bootstrapPresence() {
   publishHeartbeat().catch(() => null);
   presenceState.heartbeatTimer = setInterval(() => {
     publishHeartbeat().catch(() => null);
+    publishLanHeartbeat().catch(() => null);
   }, Math.max(5000, presenceHeartbeatMs));
 }
 
@@ -943,6 +951,54 @@ async function ipfsPubsubPublish(topic, payload) {
   if (!response.ok) {
     throw new Error(`ipfs pubsub publish failed (${response.status})`);
   }
+}
+
+function startLanPresence() {
+  if (presenceState.lanSocket) return;
+  const socket = dgram.createSocket({ type: 'udp4', reuseAddr: true });
+  presenceState.lanSocket = socket;
+
+  socket.on('error', () => null);
+  socket.on('message', (msg) => {
+    const payload = safeJsonParse(String(msg || ''));
+    const validation = validateProtocolPayload('chirpy.presence.v1', payload);
+    if (!validation.valid) return;
+    if (String(payload.id || '') === String(presenceState.instanceId || '')) return;
+    recordUser({
+      id: String(payload.id),
+      peerId: payload.peerId ? String(payload.peerId) : '',
+      name: payload.name ? String(payload.name) : '',
+      profileDid: payload.profileDid ? String(payload.profileDid) : '',
+      profileIpnsKey: payload.profileIpnsKey ? String(payload.profileIpnsKey) : '',
+      source: 'lan',
+      timestamp: payload.timestamp
+    });
+  });
+
+  socket.bind(LAN_PRESENCE_PORT, () => {
+    try {
+      socket.setBroadcast(true);
+    } catch (_error) {
+      // ignore
+    }
+  });
+}
+
+async function publishLanHeartbeat() {
+  if (!presenceState.lanSocket) return;
+  const payload = JSON.stringify({
+    schema: 'chirpy.presence/1.0.0',
+    id: presenceState.instanceId,
+    peerId: presenceState.peerId || '',
+    name: presenceState.nodeName,
+    profileDid: presenceState.profileDid || '',
+    profileIpnsKey: presenceState.profileIpnsKey || '',
+    version: '1.0.0',
+    timestamp: new Date().toISOString()
+  });
+  await new Promise((resolve) => {
+    presenceState.lanSocket.send(Buffer.from(payload, 'utf8'), LAN_PRESENCE_PORT, LAN_PRESENCE_ADDR, () => resolve());
+  });
 }
 
 function recordUser({ id, peerId, name, profileDid, profileIpnsKey, source, timestamp }) {
