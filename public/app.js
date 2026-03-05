@@ -117,8 +117,8 @@ function bindControls() {
   document.querySelectorAll("[data-format]").forEach((btn) => {
     btn.addEventListener("click", () => applyFormat(btn.dataset.format));
   });
-  els.addLinkFormat.addEventListener("click", () => {
-    const link = prompt("Enter link URL");
+  els.addLinkFormat.addEventListener("click", async () => {
+    const link = await askText("Enter link URL", "https://");
     if (!link) return;
     document.execCommand("createLink", false, link);
     scheduleSave();
@@ -393,7 +393,7 @@ async function ensureNodeNameStep() {
     return ok;
   }
   const suggestion = state.nodeName && state.nodeName.startsWith("node-") ? state.nodeName : `node-${safeUuid().slice(0, 8)}`;
-  const name = prompt("Node name (must be unique on active network nodes)", suggestion);
+  const name = await askText("Node name (must be unique on active network nodes)", suggestion);
   if (!name) return false;
   els.nodeNameInput.value = name;
   return saveNodeName();
@@ -403,7 +403,7 @@ async function ensureProfileStep() {
   let profile = getActiveProfile();
   if (profile && profile.name) return true;
   const base = `Profile ${state.profiles.length + 1}`;
-  const name = prompt("Profile name (unique only on this node)", base);
+  const name = await askText("Profile name (unique only on this node)", base);
   if (!name) return false;
   const valid = normalizeProfileName(name);
   if (!valid) {
@@ -474,7 +474,7 @@ async function fetchIpnsKeys() {
 }
 
 async function createIpnsKey(preferredName) {
-  const name = preferredName || prompt("New IPNS key name", `chirpy-main-${new Date().toISOString().slice(0, 10)}`);
+  const name = preferredName || (await askText("New IPNS key name", `chirpy-main-${new Date().toISOString().slice(0, 10)}`));
   if (!name) return null;
   try {
     const resp = await fetch("/api/ipfs/keys", {
@@ -737,8 +737,8 @@ function enforceVisibilityPolicy() {
   }
 }
 
-function createProfile() {
-  const name = prompt("Profile name", `Profile ${state.profiles.length + 1}`);
+async function createProfile() {
+  const name = await askText("Profile name", `Profile ${state.profiles.length + 1}`);
   if (!name) return;
   const normalized = normalizeProfileName(name);
   if (!normalized) {
@@ -750,8 +750,7 @@ function createProfile() {
     return;
   }
   const record = newProfileRecord(normalized);
-  const childMode = confirm("Is this a child profile (family-only posting)?");
-  record.role = childMode ? "child" : "adult";
+  record.role = "adult";
   state.profiles.push(record);
   state.activeProfileId = record.id;
   renderProfileSelect();
@@ -760,10 +759,10 @@ function createProfile() {
   scheduleSave();
 }
 
-function renameProfile() {
+async function renameProfile() {
   const profile = getActiveProfile();
   if (!profile) return;
-  const name = prompt("Rename profile", profile.name);
+  const name = await askText("Rename profile", profile.name);
   if (!name) return;
   const normalized = normalizeProfileName(name);
   if (!normalized) {
@@ -780,14 +779,14 @@ function renameProfile() {
   scheduleSave();
 }
 
-function deleteProfile() {
+async function deleteProfile() {
   if (state.profiles.length <= 1) {
     alert("At least one profile is required.");
     return;
   }
   const profile = getActiveProfile();
   if (!profile) return;
-  const confirmed = confirm(`Delete profile "${profile.name}"?`);
+  const confirmed = await askConfirm(`Delete profile "${profile.name}"?`);
   if (!confirmed) return;
   state.profiles = state.profiles.filter((x) => x.id !== profile.id);
   state.activeProfileId = state.profiles[0].id;
@@ -1639,4 +1638,64 @@ function safeUuid() {
     return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
   }
   return `fallback-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+}
+
+async function askText(message, defaultValue) {
+  const fallback = () => {
+    const result = window.prompt(message, defaultValue || "");
+    return Promise.resolve(result === null ? "" : String(result));
+  };
+  if (typeof HTMLDialogElement === "undefined") return fallback();
+
+  return new Promise((resolve) => {
+    const dialog = document.createElement("dialog");
+    dialog.className = "chirpy-dialog";
+    dialog.innerHTML = `
+      <form method="dialog" class="chirpy-dialog-form">
+        <p>${escapeHtml(message)}</p>
+        <input class="chirpy-dialog-input" type="text" value="${escapeHtml(defaultValue || "")}" />
+        <div class="row actions">
+          <button value="cancel" class="btn ghost small" type="submit">Cancel</button>
+          <button value="ok" class="btn primary small" type="submit">OK</button>
+        </div>
+      </form>
+    `;
+    document.body.appendChild(dialog);
+    const input = dialog.querySelector("input");
+    dialog.addEventListener("close", () => {
+      const ok = dialog.returnValue === "ok";
+      const out = ok ? String(input?.value || "").trim() : "";
+      dialog.remove();
+      resolve(out);
+    });
+    dialog.showModal();
+    input?.focus();
+    input?.select();
+  });
+}
+
+async function askConfirm(message) {
+  const fallback = () => Promise.resolve(Boolean(window.confirm(message)));
+  if (typeof HTMLDialogElement === "undefined") return fallback();
+
+  return new Promise((resolve) => {
+    const dialog = document.createElement("dialog");
+    dialog.className = "chirpy-dialog";
+    dialog.innerHTML = `
+      <form method="dialog" class="chirpy-dialog-form">
+        <p>${escapeHtml(message)}</p>
+        <div class="row actions">
+          <button value="cancel" class="btn ghost small" type="submit">Cancel</button>
+          <button value="ok" class="btn primary small" type="submit">Confirm</button>
+        </div>
+      </form>
+    `;
+    document.body.appendChild(dialog);
+    dialog.addEventListener("close", () => {
+      const ok = dialog.returnValue === "ok";
+      dialog.remove();
+      resolve(ok);
+    });
+    dialog.showModal();
+  });
 }

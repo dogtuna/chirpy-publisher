@@ -12,7 +12,10 @@ const els = {
   saveOnboarding: document.getElementById("saveOnboarding"),
   onboardingStatus: document.getElementById("onboardingStatus"),
   refreshRadar: document.getElementById("refreshRadar"),
-  radarList: document.getElementById("radarList")
+  radarList: document.getElementById("radarList"),
+  walkthroughGate: document.getElementById("walkthroughGate"),
+  walkthroughChecklist: document.getElementById("walkthroughChecklist"),
+  refreshWalkthrough: document.getElementById("refreshWalkthrough")
 };
 
 const state = {
@@ -31,6 +34,7 @@ async function boot() {
   bindControls();
   renderProfileSelectors();
   await hydrateDesktopContext();
+  await refreshWalkthroughGate();
   await loadChirpSpace();
   await loadRadar();
 }
@@ -69,6 +73,9 @@ function bindControls() {
   }
   if (els.refreshRadar) {
     els.refreshRadar.addEventListener("click", loadRadar);
+  }
+  if (els.refreshWalkthrough) {
+    els.refreshWalkthrough.addEventListener("click", refreshWalkthroughGate);
   }
 }
 
@@ -191,6 +198,7 @@ async function saveDesktopOnboarding() {
   state.desktopProfile = result.profile;
   hideOnboardingCard();
   els.onboardingStatus.textContent = "";
+  await refreshWalkthroughGate();
   await loadRadar();
 }
 
@@ -242,6 +250,51 @@ async function loadRadar() {
   } catch (error) {
     els.radarList.innerHTML = `<div class="empty-state">Failed to load radar: ${escapeHtml(error.message)}</div>`;
   }
+}
+
+async function refreshWalkthroughGate() {
+  if (!els.walkthroughGate || !els.walkthroughChecklist) return;
+  const checklist = await computeWalkthroughChecklist();
+  els.walkthroughChecklist.innerHTML = "";
+  checklist.forEach((item) => {
+    const row = document.createElement("div");
+    row.className = `walkthrough-item${item.ok ? " ok" : ""}`;
+    row.textContent = `${item.ok ? "DONE" : "TODO"}: ${item.label}`;
+    els.walkthroughChecklist.appendChild(row);
+  });
+  const allDone = checklist.every((x) => x.ok);
+  els.walkthroughGate.classList.toggle("hidden", allDone);
+}
+
+async function computeWalkthroughChecklist() {
+  const items = [];
+  const profile = activeViewer();
+  const desktopProfileReady = !window.chirpyDesktop || Boolean(state.desktopProfile?.nickname && (state.desktopProfile?.interests || []).length === 3);
+  items.push({ label: "Set Chirper nickname and 3 interests", ok: desktopProfileReady });
+
+  let nodeName = "";
+  let ipfsAvailable = false;
+  try {
+    const [nodeResp, setupResp] = await Promise.all([fetch("/api/network-node"), fetch("/api/setup")]);
+    const nodeData = await nodeResp.json();
+    const setupData = await setupResp.json();
+    if (nodeResp.ok && nodeData?.ok) nodeName = String(nodeData.nodeName || "").trim();
+    if (setupResp.ok && setupData?.ok) ipfsAvailable = Boolean(setupData?.ipfs?.available);
+  } catch (_error) {
+    // keep defaults
+  }
+
+  items.push({ label: "Save a unique node name", ok: Boolean(nodeName && nodeName.length >= 3) });
+  items.push({ label: "Create or select an identity profile", ok: Boolean(profile?.name) });
+  items.push({ label: "Generate DID for selected profile", ok: Boolean(profile?.userDid) });
+  items.push({ label: "Create/select IPNS key for selected profile", ok: Boolean(profile?.ipnsKey && profile.ipnsKey !== "self") });
+  items.push({
+    label: "Generate encryption keys for selected profile",
+    ok: Boolean(profile?.encryptionPublicJwk && profile?.encryptionPrivateJwk)
+  });
+  items.push({ label: "IPFS engine is running", ok: ipfsAvailable });
+
+  return items;
 }
 
 function aggregateTagsByDid(posts) {

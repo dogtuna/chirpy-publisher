@@ -336,6 +336,7 @@ app.post('/stage', upload.array('media', 50), async (req, res) => {
     const blocks = normalizeBlocks(parseJsonField(req.body.blocks, []));
 
     const tags = parseTags(req.body.tags);
+    const autoTagEnabled = String(req.body.autoTag || 'true') !== 'false';
     const visibility = req.body.visibility === 'family' ? 'family' : 'public';
     const authorRole = req.body.authorRole === 'child' ? 'child' : 'adult';
     const userDid = String(req.body.userDid || 'did:chirpy:anonymous').trim() || 'did:chirpy:anonymous';
@@ -382,11 +383,20 @@ app.post('/stage', upload.array('media', 50), async (req, res) => {
       links.push(card);
     }
 
+    const semanticTags = await buildSemanticTags({
+      autoTagEnabled,
+      existingTags: tags,
+      text,
+      blocks,
+      links
+    });
+    const finalTags = normalizeTagList([...tags, ...semanticTags]).slice(0, 12);
+
     const createdAt = new Date().toISOString();
     const postJson = {
       text,
-      tags,
-      semanticTags: tags,
+      tags: finalTags,
+      semanticTags,
       links,
       blocks,
       visibility,
@@ -406,7 +416,8 @@ app.post('/stage', upload.array('media', 50), async (req, res) => {
         authorRole,
         visibility,
         text,
-        tags,
+        tags: finalTags,
+        semanticTags,
         blocks,
         mediaOptions,
         postStyle
@@ -1226,6 +1237,110 @@ function parseTags(raw) {
     .map((x) => x.trim())
     .filter(Boolean)
     .slice(0, 40);
+}
+
+async function buildSemanticTags({ autoTagEnabled, existingTags, text, blocks, links }) {
+  const manual = normalizeTagList(existingTags);
+  if (!autoTagEnabled) return manual;
+
+  const corpus = buildTagCorpus(text, blocks, links);
+  const ollamaTags = await generateTagsWithOllama(corpus, manual);
+  const fallbackTags = extractKeywordTags(corpus, manual);
+  return normalizeTagList([...manual, ...ollamaTags, ...fallbackTags]).slice(0, 12);
+}
+
+function buildTagCorpus(text, blocks, links) {
+  const parts = [String(text || '')];
+  for (const block of Array.isArray(blocks) ? blocks : []) {
+    parts.push(String(block?.content || ''));
+    parts.push(String(block?.url || ''));
+  }
+  for (const link of Array.isArray(links) ? links : []) {
+    parts.push(String(link?.title || ''));
+    parts.push(String(link?.description || ''));
+    parts.push(String(link?.siteName || ''));
+  }
+  return parts.join('\n').trim();
+}
+
+async function generateTagsWithOllama(corpus, existingTags) {
+  if (!corpus || corpus.length < 8) return [];
+  const host = String(process.env.OLLAMA_HOST || 'http://127.0.0.1:11434').trim();
+  const model = String(process.env.OLLAMA_MODEL || 'llama3.2:3b').trim();
+  const prompt = [
+    'Generate up to 8 concise content tags as comma-separated words/phrases.',
+    'Use lowercase. No hashtags. No numbering. No explanation.',
+    `Existing tags: ${existingTags.join(', ') || '(none)'}`,
+    'Content:',
+    corpus.slice(0, 3000)
+  ].join('\n');
+
+  try {
+    const response = await fetch(`${host}/api/generate`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model,
+        prompt,
+        stream: false,
+        options: { temperature: 0.2 }
+      })
+    });
+    if (!response.ok) return [];
+    const data = await response.json();
+    const raw = String(data?.response || '').trim();
+    return normalizeTagList(raw.split(',').map((x) => x.trim())).slice(0, 8);
+  } catch (_error) {
+    return [];
+  }
+}
+
+function extractKeywordTags(corpus, existingTags) {
+  const base = String(corpus || '')
+    .toLowerCase()
+    .replace(/https?:\/\/\S+/g, ' ')
+    .replace(/[^a-z0-9\s-]/g, ' ');
+  const stop = new Set([
+    'the', 'and', 'for', 'with', 'this', 'that', 'from', 'into', 'have', 'just', 'your', 'about', 'also', 'were',
+    'been', 'will', 'would', 'there', 'their', 'they', 'them', 'then', 'than', 'what', 'when', 'where', 'while',
+    'how', 'why', 'you', 'our', 'out', 'too', 'can', 'not', 'are', 'was', 'but', 'its', 'it', 'on', 'of', 'to',
+    'in', 'a', 'an', 'or', 'at', 'by', 'as', 'is'
+  ]);
+
+  const counts = new Map();
+  for (const token of base.split(/\s+/)) {
+    if (token.length < 3 || token.length > 28) continue;
+    if (/^\d+$/.test(token)) continue;
+    if (stop.has(token)) continue;
+    counts.set(token, (counts.get(token) || 0) + 1);
+  }
+
+  const existing = new Set(normalizeTagList(existingTags));
+  return Array.from(counts.entries())
+    .sort((a, b) => b[1] - a[1])
+    .map(([word]) => word)
+    .filter((word) => !existing.has(word))
+    .slice(0, 6);
+}
+
+function normalizeTagList(values) {
+  const raw = Array.isArray(values)
+    ? values
+    : String(values || '')
+        .split(',')
+        .map((x) => x.trim());
+  const set = new Set();
+  for (const value of raw) {
+    const clean = String(value || '')
+      .toLowerCase()
+      .replace(/^#+/, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 40);
+    if (!clean || clean.length < 2) continue;
+    set.add(clean);
+  }
+  return Array.from(set);
 }
 
 function sanitizeIpnsKeyName(value) {
