@@ -594,6 +594,11 @@ class SidecarManager {
       } catch (_error) {
         // best-effort: may not exist or may already be clear
       }
+      try {
+        await this.execFileSafe('codesign', ['--force', '--sign', '-', filePath], 12000);
+      } catch (_error) {
+        // best-effort: command may be unavailable or signing may fail in some environments
+      }
     }
   }
 
