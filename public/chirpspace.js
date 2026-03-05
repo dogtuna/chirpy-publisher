@@ -134,24 +134,32 @@ async function hydrateDesktopContext() {
     return;
   }
 
+  let profileLoaded = false;
   try {
-    const [statusResp, profileResp] = await Promise.all([
-      window.chirpyDesktop.getStatus(),
-      window.chirpyDesktop.getProfile()
-    ]);
-    state.desktopStatus = statusResp?.ok ? statusResp : null;
+    const profileResp = await window.chirpyDesktop.getProfile();
     state.desktopProfile = profileResp?.ok ? profileResp.profile : null;
-    renderDesktopRuntime();
-    if (state.desktopProfile?.nickname && Array.isArray(state.desktopProfile?.interests)) {
-      hideOnboardingCard();
-      prefillDesktopProfile();
-    } else {
-      showOnboardingCard();
-    }
+    profileLoaded = true;
   } catch (_error) {
-    if (els.desktopRuntime) els.desktopRuntime.textContent = "Desktop runtime status unavailable.";
-    showOnboardingCard();
+    state.desktopProfile = null;
   }
+
+  try {
+    const statusResp = await window.chirpyDesktop.getStatus();
+    state.desktopStatus = statusResp?.ok ? statusResp : null;
+  } catch (_error) {
+    state.desktopStatus = null;
+  }
+
+  renderDesktopRuntime();
+  if (state.desktopProfile?.nickname && Array.isArray(state.desktopProfile?.interests)) {
+    hideOnboardingCard();
+    prefillDesktopProfile();
+    return;
+  }
+  if (!profileLoaded && els.desktopRuntime) {
+    els.desktopRuntime.textContent = "Desktop profile unavailable right now.";
+  }
+  showOnboardingCard();
 }
 
 function renderDesktopRuntime() {
