@@ -36,6 +36,10 @@ const els = {
   newProfile: document.getElementById("newProfile"),
   renameProfile: document.getElementById("renameProfile"),
   deleteProfile: document.getElementById("deleteProfile"),
+  desktopNickname: document.getElementById("desktopNickname"),
+  desktopInterests: document.getElementById("desktopInterests"),
+  saveDesktopProfile: document.getElementById("saveDesktopProfile"),
+  desktopProfileStatus: document.getElementById("desktopProfileStatus"),
   userDid: document.getElementById("userDid"),
   ipnsKey: document.getElementById("ipnsKey"),
   tags: document.getElementById("tags"),
@@ -79,7 +83,8 @@ const state = {
   },
   nodeName: "",
   nodeNameAvailable: null,
-  nodeNameCheckTimer: null
+  nodeNameCheckTimer: null,
+  desktopProfile: null
 };
 
 boot();
@@ -98,6 +103,7 @@ function boot() {
   renderLivePreview();
   loadSetup();
   loadNodeIdentity();
+  loadDesktopProfile();
   autoUpgradeProfilesSilently();
   loadHistory();
   loadUsers();
@@ -160,6 +166,9 @@ function bindControls() {
   els.newProfile.addEventListener("click", createProfile);
   els.renameProfile.addEventListener("click", renameProfile);
   els.deleteProfile.addEventListener("click", deleteProfile);
+  if (els.saveDesktopProfile) {
+    els.saveDesktopProfile.addEventListener("click", saveDesktopProfile);
+  }
   if (els.saveNodeName) {
     els.saveNodeName.addEventListener("click", saveNodeName);
   }
@@ -359,6 +368,7 @@ async function runFirstTimeSetup() {
     if (!(await ensureDidStep())) return;
     if (!(await ensureIpnsStep())) return;
     if (!(await ensureEncryptionStep())) return;
+    if (!(await ensureDesktopProfileStep())) return;
     if (els.nodeNameStatus) {
       els.nodeNameStatus.textContent = "Setup complete.";
     }
@@ -374,6 +384,7 @@ async function runFirstTimeSetup() {
 function isSetupComplete() {
   const profile = getActiveProfile();
   const nodeNameSet = Boolean(state.nodeName && normalizeNodeNameLocal(state.nodeName));
+  const desktopReady = isDesktopProfileComplete();
   if (!profile) return false;
   return Boolean(
     nodeNameSet &&
@@ -382,8 +393,16 @@ function isSetupComplete() {
     profile.ipnsKey &&
     profile.ipnsKey !== "self" &&
     profile.encryptionPublicJwk &&
-    profile.encryptionPrivateJwk
+    profile.encryptionPrivateJwk &&
+    desktopReady
   );
+}
+
+function isDesktopProfileComplete() {
+  if (!window.chirpyDesktop) return true;
+  const nickname = String(state.desktopProfile?.nickname || "").trim();
+  const interests = Array.isArray(state.desktopProfile?.interests) ? state.desktopProfile.interests : [];
+  return Boolean(nickname && interests.length === 3);
 }
 
 async function ensureNodeNameStep() {
@@ -452,6 +471,99 @@ async function ensureEncryptionStep() {
   await generateEncryptionKeysOnly();
   const refreshed = getActiveProfile();
   return Boolean(refreshed?.encryptionPublicJwk && refreshed?.encryptionPrivateJwk);
+}
+
+async function ensureDesktopProfileStep() {
+  if (!window.chirpyDesktop) return true;
+  if (isDesktopProfileComplete()) return true;
+
+  const nicknameExisting = String(els.desktopNickname?.value || "").trim();
+  const interestsExisting = String(els.desktopInterests?.value || "")
+    .split(",")
+    .map((x) => x.trim())
+    .filter(Boolean);
+  if (nicknameExisting && interestsExisting.length === 3) {
+    return saveDesktopProfile();
+  }
+
+  const nickname = await askText("Chirper nickname (how you appear in Chirpers)", "My Chirper");
+  if (!nickname) return false;
+  const interests = await askText("Set exactly 3 interests, comma separated", "3D printing, electronics, music");
+  if (!interests) return false;
+  if (els.desktopNickname) els.desktopNickname.value = nickname;
+  if (els.desktopInterests) els.desktopInterests.value = interests;
+  return saveDesktopProfile();
+}
+
+async function loadDesktopProfile() {
+  if (!els.desktopProfileStatus) return;
+  if (!window.chirpyDesktop) {
+    els.desktopProfileStatus.textContent = "Desktop-only setting (available in Electron app).";
+    if (els.saveDesktopProfile) els.saveDesktopProfile.disabled = true;
+    return;
+  }
+  try {
+    const result = await window.chirpyDesktop.getProfile();
+    if (!result?.ok) throw new Error("profile load failed");
+    state.desktopProfile = result.profile || null;
+    if (els.desktopNickname) els.desktopNickname.value = String(state.desktopProfile?.nickname || "");
+    if (els.desktopInterests) {
+      els.desktopInterests.value = Array.isArray(state.desktopProfile?.interests) ? state.desktopProfile.interests.join(", ") : "";
+    }
+    renderDesktopProfileStatus();
+    syncSetupGate();
+  } catch (_error) {
+    els.desktopProfileStatus.textContent = "Could not load desktop profile right now.";
+  }
+}
+
+async function saveDesktopProfile() {
+  if (!els.desktopProfileStatus) return false;
+  if (!window.chirpyDesktop) {
+    els.desktopProfileStatus.textContent = "Desktop-only setting (available in Electron app).";
+    return false;
+  }
+  const nickname = String(els.desktopNickname?.value || "").trim();
+  const interests = String(els.desktopInterests?.value || "")
+    .split(",")
+    .map((x) => x.trim())
+    .filter(Boolean);
+
+  if (!nickname) {
+    els.desktopProfileStatus.textContent = "Nickname is required.";
+    return false;
+  }
+  if (interests.length !== 3) {
+    els.desktopProfileStatus.textContent = "Enter exactly 3 interests (comma separated).";
+    return false;
+  }
+
+  try {
+    const result = await window.chirpyDesktop.saveProfile({ nickname, interests });
+    if (!result?.ok) throw new Error(result?.error || "save failed");
+    state.desktopProfile = result.profile || null;
+    renderDesktopProfileStatus();
+    syncSetupGate();
+    return true;
+  } catch (error) {
+    els.desktopProfileStatus.textContent = `Could not save: ${error.message}`;
+    return false;
+  }
+}
+
+function renderDesktopProfileStatus() {
+  if (!els.desktopProfileStatus) return;
+  if (!window.chirpyDesktop) {
+    els.desktopProfileStatus.textContent = "Desktop-only setting (available in Electron app).";
+    return;
+  }
+  const nickname = String(state.desktopProfile?.nickname || "").trim();
+  const interests = Array.isArray(state.desktopProfile?.interests) ? state.desktopProfile.interests : [];
+  if (nickname && interests.length === 3) {
+    els.desktopProfileStatus.textContent = `Saved as "${nickname}" with ${interests.length} interests.`;
+  } else {
+    els.desktopProfileStatus.textContent = "Set nickname + exactly 3 interests to complete setup.";
+  }
 }
 
 async function fetchIpnsKeys() {

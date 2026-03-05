@@ -193,6 +193,11 @@
     background: #fff;
 }
 
+.walkthrough-item strong {
+    display: block;
+    margin-bottom: 0.2rem;
+}
+
 .walkthrough-item.ok {
     border-color: color-mix(in srgb, var(--brand) 40%, #ffffff);
 }

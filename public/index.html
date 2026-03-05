@@ -37,6 +37,21 @@
           <button id="refreshKeys" class="btn ghost small" type="button">Refresh IPNS Keys</button>
         </div>
         <details>
+          <summary class="sub small">Desktop Chirper Profile</summary>
+          <label class="field">
+            <span>Chirper Nickname</span>
+            <input id="desktopNickname" type="text" placeholder="How you appear in Chirpers" />
+          </label>
+          <label class="field">
+            <span>Interests (exactly 3, comma separated)</span>
+            <input id="desktopInterests" type="text" placeholder="3D printing, electronics, music" />
+          </label>
+          <div class="row actions">
+            <button id="saveDesktopProfile" class="btn ghost small" type="button">Save Chirper Profile</button>
+            <span id="desktopProfileStatus" class="sub small">Desktop profile not loaded yet.</span>
+          </div>
+        </details>
+        <details>
           <summary class="sub small">Advanced Identifiers</summary>
           <div class="onboarding">
             <div class="row between"><span>DID</span><span id="didStatus" class="status idle">CHECKING</span><button

@@ -259,7 +259,11 @@ async function refreshWalkthroughGate() {
   checklist.forEach((item) => {
     const row = document.createElement("div");
     row.className = `walkthrough-item${item.ok ? " ok" : ""}`;
-    row.textContent = `${item.ok ? "DONE" : "TODO"}: ${item.label}`;
+    const status = item.ok ? "DONE" : "TODO";
+    row.innerHTML = `
+      <strong>${status}: ${escapeHtml(item.label)}</strong>
+      <div class="sub small">${escapeHtml(item.description || "")}</div>
+    `;
     els.walkthroughChecklist.appendChild(row);
   });
   const allDone = checklist.every((x) => x.ok);
@@ -270,7 +274,11 @@ async function computeWalkthroughChecklist() {
   const items = [];
   const profile = activeViewer();
   const desktopProfileReady = !window.chirpyDesktop || Boolean(state.desktopProfile?.nickname && (state.desktopProfile?.interests || []).length === 3);
-  items.push({ label: "Set Chirper nickname and 3 interests", ok: desktopProfileReady });
+  items.push({
+    label: "Set Chirper nickname and 3 interests",
+    description: "Improves Chirper matching so your feed highlights relevant people and posts.",
+    ok: desktopProfileReady
+  });
 
   let nodeName = "";
   let ipfsAvailable = false;
@@ -284,15 +292,36 @@ async function computeWalkthroughChecklist() {
     // keep defaults
   }
 
-  items.push({ label: "Save a unique node name", ok: Boolean(nodeName && nodeName.length >= 3) });
-  items.push({ label: "Create or select an identity profile", ok: Boolean(profile?.name) });
-  items.push({ label: "Generate DID for selected profile", ok: Boolean(profile?.userDid) });
-  items.push({ label: "Create/select IPNS key for selected profile", ok: Boolean(profile?.ipnsKey && profile.ipnsKey !== "self") });
+  items.push({
+    label: "Save a unique node name",
+    description: "This is your node identity on the network so others can distinguish your instance.",
+    ok: Boolean(nodeName && nodeName.length >= 3)
+  });
+  items.push({
+    label: "Create or select an identity profile",
+    description: "Profiles represent people on your node and control posting role/visibility.",
+    ok: Boolean(profile?.name)
+  });
+  items.push({
+    label: "Generate DID for selected profile",
+    description: "DID identifies the profile for discovery and recipient-level privacy controls.",
+    ok: Boolean(profile?.userDid)
+  });
+  items.push({
+    label: "Create/select IPNS key for selected profile",
+    description: "IPNS key gives your profile a stable publish address for updates over time.",
+    ok: Boolean(profile?.ipnsKey && profile.ipnsKey !== "self")
+  });
   items.push({
     label: "Generate encryption keys for selected profile",
+    description: "Needed for family/private posts and decrypting content intended for this profile.",
     ok: Boolean(profile?.encryptionPublicJwk && profile?.encryptionPrivateJwk)
   });
-  items.push({ label: "IPFS engine is running", ok: ipfsAvailable });
+  items.push({
+    label: "IPFS engine is running",
+    description: "Enables publishing, pubsub presence, and cross-node discovery.",
+    ok: ipfsAvailable
+  });
 
   return items;
 }
