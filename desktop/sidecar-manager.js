@@ -132,6 +132,12 @@ class SidecarManager {
       this.state.ollama = { ...this.state.ollama, available: true, running: true, source: 'bundled', error: '' };
       await this.ensureOllamaModels(ollamaBin);
     } catch (error) {
+      const fallbackOk = await this.tryStartExternalOllama();
+      if (fallbackOk) {
+        this.state.ollama = { ...this.state.ollama, available: true, running: true, source: 'external', error: '' };
+        await this.ensureOllamaModels('ollama');
+        return;
+      }
       this.state.ollama = {
         ...this.state.ollama,
         available: true,
@@ -140,6 +146,23 @@ class SidecarManager {
         error: error.message || 'ollama startup failed',
         modelReady: false
       };
+    }
+  }
+
+  async tryStartExternalOllama() {
+    try {
+      this.ollamaProcess = spawn('ollama', ['serve'], {
+        stdio: ['ignore', 'ignore', 'pipe'],
+        env: { ...process.env, OLLAMA_HOST: '127.0.0.1:11434' }
+      });
+      this.ollamaProcess.stderr.on('data', () => null);
+      this.ollamaProcess.on('exit', () => {
+        this.state.ollama.running = false;
+      });
+      await this.waitFor(async () => this.ollamaResponding(), 60000, 500);
+      return true;
+    } catch (_error) {
+      return false;
     }
   }
 

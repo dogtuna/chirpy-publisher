@@ -65,14 +65,16 @@ async function ensureServerRunning() {
 
   const serverEntry = path.join(app.getAppPath(), 'src', 'server.js');
   const sidecarStatus = sidecars ? sidecars.getStatus() : null;
+  const ipfsSource = String(sidecarStatus?.ipfs?.source || '').trim();
   const ipfsBinary = String(sidecarStatus?.ipfs?.binaryPath || '').trim();
+  const ipfsCmd = ipfsSource === 'external' ? 'ipfs' : (ipfsBinary || 'ipfs');
   serverChild = spawn(process.execPath, [serverEntry], {
     env: {
       ...process.env,
       ELECTRON_RUN_AS_NODE: '1',
       PORT: String(PORT),
       CHIRPY_BIND_HOST: HOST,
-      CHIRPY_IPFS_BIN: ipfsBinary || 'ipfs',
+      CHIRPY_IPFS_BIN: ipfsCmd,
       OLLAMA_HOST: 'http://127.0.0.1:11434',
       IPFS_PATH: path.join(app.getPath('userData'), 'ipfs-data')
     },
