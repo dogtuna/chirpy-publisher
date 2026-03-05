@@ -64,6 +64,7 @@ class SidecarManager {
 
     try {
       await this.ensureExecutable(ipfsBin);
+      let ipfsSpawnError = null;
       await this.ensureIpfsInitialized(ipfsBin, ipfsPath);
       this.ipfsProcess = spawn(ipfsBin, ['daemon', '--migrate=true'], {
         stdio: ['ignore', 'ignore', 'pipe'],
@@ -72,12 +73,19 @@ class SidecarManager {
           IPFS_PATH: ipfsPath
         }
       });
+      this.ipfsProcess.on('error', (error) => {
+        ipfsSpawnError = error;
+        this.state.ipfs.running = false;
+      });
       this.ipfsProcess.stderr.on('data', () => null);
       this.ipfsProcess.on('exit', () => {
         this.state.ipfs.running = false;
       });
 
-      await this.waitFor(async () => this.ipfsResponding(ipfsBin), 20000, 500);
+      await this.waitFor(async () => {
+        if (ipfsSpawnError) throw ipfsSpawnError;
+        return this.ipfsResponding(ipfsBin);
+      }, 20000, 500);
       this.state.ipfs = { ...this.state.ipfs, available: true, running: true, source: 'bundled', error: '' };
     } catch (error) {
       this.state.ipfs = {
@@ -115,6 +123,7 @@ class SidecarManager {
     await fs.mkdir(modelsPath, { recursive: true });
     try {
       await this.ensureExecutable(ollamaBin);
+      let ollamaSpawnError = null;
       this.ollamaProcess = spawn(ollamaBin, ['serve'], {
         stdio: ['ignore', 'ignore', 'pipe'],
         env: {
@@ -123,12 +132,19 @@ class SidecarManager {
           OLLAMA_HOST: '127.0.0.1:11434'
         }
       });
+      this.ollamaProcess.on('error', (error) => {
+        ollamaSpawnError = error;
+        this.state.ollama.running = false;
+      });
       this.ollamaProcess.stderr.on('data', () => null);
       this.ollamaProcess.on('exit', () => {
         this.state.ollama.running = false;
       });
 
-      await this.waitFor(async () => this.ollamaResponding(), 60000, 500);
+      await this.waitFor(async () => {
+        if (ollamaSpawnError) throw ollamaSpawnError;
+        return this.ollamaResponding();
+      }, 60000, 500);
       this.state.ollama = { ...this.state.ollama, available: true, running: true, source: 'bundled', error: '' };
       await this.ensureOllamaModels(ollamaBin);
     } catch (error) {
@@ -151,15 +167,23 @@ class SidecarManager {
 
   async tryStartExternalOllama() {
     try {
+      let spawnError = null;
       this.ollamaProcess = spawn('ollama', ['serve'], {
         stdio: ['ignore', 'ignore', 'pipe'],
         env: { ...process.env, OLLAMA_HOST: '127.0.0.1:11434' }
+      });
+      this.ollamaProcess.on('error', (error) => {
+        spawnError = error;
+        this.state.ollama.running = false;
       });
       this.ollamaProcess.stderr.on('data', () => null);
       this.ollamaProcess.on('exit', () => {
         this.state.ollama.running = false;
       });
-      await this.waitFor(async () => this.ollamaResponding(), 60000, 500);
+      await this.waitFor(async () => {
+        if (spawnError) throw spawnError;
+        return this.ollamaResponding();
+      }, 60000, 500);
       return true;
     } catch (_error) {
       return false;
