@@ -1383,6 +1383,8 @@ async function inferAudienceTags(corpus, bucketTags) {
     'music-fans',
     'creators',
     'developers',
+    'makers',
+    '3d-printing',
     'web-developers',
     'ai-builders',
     'sysadmins',
@@ -1396,6 +1398,7 @@ async function inferAudienceTags(corpus, bucketTags) {
     'parents',
     'students',
     'educators',
+    'gardeners',
     'travelers',
     'food-lovers',
     'health-fitness',
@@ -1403,8 +1406,13 @@ async function inferAudienceTags(corpus, bucketTags) {
   ];
 
   const modelAudiences = await inferAudienceTagsWithOllama(text, bucketTags, allowedAudiences);
-  if (modelAudiences.length) return modelAudiences.slice(0, 4);
-  return inferAudienceTagsByKeyword(text).slice(0, 4);
+  const keywordAudiences = inferAudienceTagsByKeyword(text).slice(0, 4);
+  const modelOnlyGeneral = modelAudiences.length > 0 && modelAudiences.every((x) => x === 'general');
+  if (!modelAudiences.length || modelOnlyGeneral) {
+    if (keywordAudiences.some((x) => x !== 'general')) return keywordAudiences;
+    return modelAudiences.length ? modelAudiences.slice(0, 4) : keywordAudiences;
+  }
+  return modelAudiences.slice(0, 4);
 }
 
 async function inferAudienceTagsWithOllama(text, bucketTags, allowedAudiences) {
@@ -1448,6 +1456,9 @@ function inferAudienceTagsByKeyword(text) {
   const value = String(text || '').toLowerCase();
   const out = [];
   const checks = [
+    ['3d-printing', ['stl', 'nozzle', 'flow rate', 'filament', 'extruder', 'print bed', 'layer height', 'slicer']],
+    ['makers', ['stl', 'nozzle', 'flow rate', 'filament', 'extruder', 'garage bench', 'workbench']],
+    ['gardeners', ['planting', 'seeds', 'roots', 'soil', 'freeze', 'magnolia', 'garden', 'sprout']],
     ['network-engineers', ['latency', 'connection', 'bridge', 'packet', 'network', 'throughput']],
     ['sysadmins', ['troubleshooting', 'incident', 'outage', 'logs', 'service']],
     ['devops', ['deploy', 'deployment', 'pipeline', 'infra', 'kubernetes', 'docker']],
@@ -1695,7 +1706,6 @@ async function inferBucketTags(corpus, namedPhrases) {
   ];
 
   const fromModel = await inferBucketsWithOllama(text, allowedBuckets);
-  if (fromModel.length) return fromModel.slice(0, 3);
 
   const keywordMap = {
     sports: ['baseball', 'mlb', 'nfl', 'nba', 'nhl', 'soccer', 'football', 'playoffs', 'opening day', 'team', 'season'],
@@ -1713,7 +1723,11 @@ async function inferBucketTags(corpus, namedPhrases) {
     gaming: ['game', 'gaming', 'xbox', 'playstation', 'nintendo', 'steam'],
     food: ['recipe', 'cooking', 'restaurant', 'meal', 'kitchen'],
     travel: ['travel', 'trip', 'flight', 'hotel', 'vacation', 'road trip'],
-    lifestyle: ['daily', 'routine', 'home', 'hobby', 'life'],
+    lifestyle: [
+      'daily', 'routine', 'home', 'hobby', 'life',
+      'planting', 'seeds', 'roots', 'soil', 'garden', 'magnolia', 'freeze',
+      'stl', 'filament', 'nozzle', 'flow rate', 'extruder', 'workbench'
+    ],
     family: ['family', 'kids', 'parent', 'child'],
     news: ['breaking', 'update', 'headline', 'report'],
     music: ['song', 'album', 'playlist', 'artist', 'band'],
@@ -1727,14 +1741,26 @@ async function inferBucketTags(corpus, namedPhrases) {
     const score = hints.reduce((acc, hint) => (text.includes(hint) ? acc + 1 : acc), 0);
     if (score > 0) scored.push([bucket, score]);
   }
+  const fromKeyword = scored.sort((a, b) => b[1] - a[1]).map(([bucket]) => bucket).slice(0, 3);
+
+  if (fromModel.length) {
+    const modelOnlyGeneral = fromModel.every((x) => x === 'general');
+    if (modelOnlyGeneral && fromKeyword.some((x) => x !== 'general')) {
+      return fromKeyword;
+    }
+    const merged = normalizeTagList([...fromModel, ...fromKeyword]);
+    const nonGeneral = merged.filter((x) => x !== 'general');
+    if (nonGeneral.length) return nonGeneral.slice(0, 3);
+    return merged.slice(0, 3);
+  }
 
   // If user mentions named media-like titles and no clear bucket, bias toward entertainment.
   if (!scored.length && Array.isArray(namedPhrases) && namedPhrases.length > 0 && /\bfans of\b/.test(text)) {
     return ['entertainment', 'tv'];
   }
 
-  if (!scored.length) return ['general'];
-  return scored.sort((a, b) => b[1] - a[1]).map(([bucket]) => bucket).slice(0, 3);
+  if (!fromKeyword.length) return ['general'];
+  return fromKeyword;
 }
 
 async function inferBucketsWithOllama(text, allowedBuckets) {
