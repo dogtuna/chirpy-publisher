@@ -1243,7 +1243,8 @@ async function buildSemanticTags({ autoTagEnabled, existingTags, text, blocks, l
   const namedPhrases = extractNamedPhraseTags(corpus).slice(0, 5);
   const mediaTitles = extractMediaTitleCandidates(corpus).slice(0, 4);
   const bucketTags = semantic.buckets.length ? semantic.buckets : await inferBucketTags(corpus, namedPhrases);
-  const subtopicTags = semantic.subtopics || [];
+  const audienceTags = await inferAudienceTags(corpus, bucketTags);
+  const subtopicTags = (semantic.subtopics || []).filter((tag) => !isWeakAudienceTag(tag)).slice(0, 3);
   const entityTags = semantic.entities || [];
   const ollamaTags = semantic.usedModel ? [] : await generateTagsWithOllama(corpus, manual);
   const baseHighSignal = normalizeTagList([
@@ -1252,10 +1253,12 @@ async function buildSemanticTags({ autoTagEnabled, existingTags, text, blocks, l
     ...mediaTitles,
     ...entityTags,
     ...bucketTags,
+    ...audienceTags,
     ...subtopicTags,
     ...ollamaTags
   ]);
-  const hasStrongSemanticSignal = baseHighSignal.length >= 2 && bucketTags.length >= 1;
+  const hasStrongSemanticSignal =
+    bucketTags.length >= 1 && (audienceTags.length >= 1 || entityTags.length >= 1 || namedPhrases.length >= 1);
   const fallbackTags = hasStrongSemanticSignal
     ? []
     : extractKeywordTags(corpus, [...baseHighSignal]);
@@ -1343,6 +1346,101 @@ async function analyzePostSemantics(corpus) {
   } catch (_error) {
     return { usedModel: false, buckets: [], subtopics: [], entities: [] };
   }
+}
+
+async function inferAudienceTags(corpus, bucketTags) {
+  const text = String(corpus || '').trim();
+  if (!text) return [];
+
+  const allowedAudiences = [
+    'movie-fans',
+    'tv-fans',
+    'sports-fans',
+    'baseball-fans',
+    'gamers',
+    'music-fans',
+    'creators',
+    'developers',
+    'web-developers',
+    'ai-builders',
+    'sysadmins',
+    'network-engineers',
+    'devops',
+    'homelab',
+    'cybersecurity',
+    'startup-founders',
+    'product-managers',
+    'investors',
+    'parents',
+    'students',
+    'educators',
+    'travelers',
+    'food-lovers',
+    'health-fitness',
+    'general'
+  ];
+
+  const modelAudiences = await inferAudienceTagsWithOllama(text, bucketTags, allowedAudiences);
+  if (modelAudiences.length) return modelAudiences.slice(0, 4);
+  return inferAudienceTagsByKeyword(text).slice(0, 4);
+}
+
+async function inferAudienceTagsWithOllama(text, bucketTags, allowedAudiences) {
+  const host = String(process.env.OLLAMA_HOST || 'http://127.0.0.1:11434').trim();
+  const model = String(process.env.OLLAMA_MODEL || 'llama3.2:3b').trim();
+  const prompt = [
+    'Select audience cohorts for this post.',
+    'Return strict JSON object with key: audiences',
+    `audiences: array with 1-4 values from this fixed list only: ${allowedAudiences.join(', ')}`,
+    `Known broad buckets: ${bucketTags.join(', ') || 'general'}`,
+    'Choose who would care about this post, not just topic words.',
+    'Post:',
+    text.slice(0, 2400)
+  ].join('\n');
+
+  try {
+    const response = await fetch(`${host}/api/generate`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model,
+        prompt,
+        stream: false,
+        format: 'json',
+        options: { temperature: 0.1 }
+      })
+    });
+    if (!response.ok) return [];
+    const data = await response.json();
+    const raw = String(data?.response || '').trim();
+    const parsed = parseLooseJsonObject(raw);
+    const audiences = normalizeTagList(Array.isArray(parsed?.audiences) ? parsed.audiences : []);
+    const allowed = new Set(allowedAudiences);
+    return audiences.filter((x) => allowed.has(x));
+  } catch (_error) {
+    return [];
+  }
+}
+
+function inferAudienceTagsByKeyword(text) {
+  const value = String(text || '').toLowerCase();
+  const out = [];
+  const checks = [
+    ['network-engineers', ['latency', 'connection', 'bridge', 'packet', 'network', 'throughput']],
+    ['sysadmins', ['troubleshooting', 'incident', 'outage', 'logs', 'service']],
+    ['devops', ['deploy', 'deployment', 'pipeline', 'infra', 'kubernetes', 'docker']],
+    ['developers', ['code', 'coding', 'bug', 'debug', 'api', 'javascript', 'python']],
+    ['movie-fans', ['movie', 'film', 'cinema']],
+    ['tv-fans', ['series', 'episode', 'show', 'season']],
+    ['sports-fans', ['sports', 'team', 'season', 'playoffs']],
+    ['baseball-fans', ['baseball', 'mlb', 'rangers', 'yankees']],
+    ['ai-builders', ['ai', 'llm', 'model', 'embedding', 'prompt']]
+  ];
+  for (const [tag, hints] of checks) {
+    if (hints.some((hint) => value.includes(hint))) out.push(tag);
+  }
+  if (!out.length) out.push('general');
+  return normalizeTagList(out);
 }
 
 function parseLooseJsonObject(raw) {
@@ -1735,6 +1833,21 @@ function isWeakTag(tag) {
   if (words.length === 1 && words[0].length <= 3 && !['mlb', 'nfl', 'nba', 'nhl', 'ai'].includes(words[0])) return true;
   if (words.every((w) => weakTerms.has(w))) return true;
   return false;
+}
+
+function isWeakAudienceTag(tag) {
+  const value = String(tag || '').toLowerCase();
+  if (!value) return true;
+  const disallowed = new Set([
+    'hours troubleshooting',
+    'finally solid',
+    'still killing',
+    'spent three',
+    'three hours',
+    'blinders movie',
+    'upcoming peaky'
+  ]);
+  return disallowed.has(value);
 }
 
 function sanitizeIpnsKeyName(value) {
