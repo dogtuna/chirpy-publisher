@@ -1296,10 +1296,10 @@ async function buildSemanticTags({ autoTagEnabled, existingTags, text, blocks, l
   const inferredNiches = await inferNicheDepthTags(corpus, semantic.bucket, semantic.audience);
   const bucketTag = normalizeTagList([semantic.bucket]).filter((x) => MODEL_BUCKETS.includes(x));
   const audienceTag = normalizeTagList([semantic.audience]).filter((x) => MODEL_AUDIENCES.includes(x));
-  const subtopics = normalizeTagList([...(semantic.subtopics || []), ...inferredNiches])
-    .filter((x) => isSubtopicConsistentWithBucket(x, semantic.bucket, corpus))
+  const subtopicCandidates = normalizeTagList([...(semantic.subtopics || []), ...inferredNiches])
     .filter((x) => !isWeakAudienceTag(x))
-    .slice(0, 4);
+    .slice(0, 6);
+  const subtopics = await filterSubtopicsBySemanticFit(subtopicCandidates, corpus, semantic.bucket);
   const entities = normalizeTagList(semantic.entities || []).filter((x) => !isWeakTag(x)).slice(0, 2);
 
   const merged = normalizeTagList([
@@ -1414,7 +1414,6 @@ async function inferNicheDepthTags(corpus, bucket, audience) {
     '- if sports context exists, include sport type and team/league/franchise where relevant.',
     '- if entertainment context exists, include medium + title/franchise when relevant.',
     '- if technology context exists, include domain + platform/protocol/tool when relevant.',
-    '- do not infer motorsports from the word "drivers" unless explicit race context is present.',
     `Selected top-level bucket: ${String(bucket || 'general')}`,
     `Selected audience: ${String(audience || 'general')}`,
     'Post:',
@@ -1452,26 +1451,43 @@ async function inferNicheDepthTags(corpus, bucket, audience) {
   }
 }
 
-function isSubtopicConsistentWithBucket(subtopic, bucket, corpus) {
-  const tag = String(subtopic || '').toLowerCase().trim();
-  const top = String(bucket || '').toLowerCase().trim();
-  const text = String(corpus || '').toLowerCase();
-  if (!tag || !top) return true;
-
-  if (top === 'technology') {
-    const motorsportTags = ['formula 1', 'car racing', 'racing drivers', 'motorsport', 'grand prix', 'f1'];
-    const motorsportCues = ['formula 1', 'f1', 'grand prix', 'pit lane', 'race track', 'lap time'];
-    const techDriverCues = [
-      'driver', 'drivers', 'device', 'firmware', 'kernel', 'gpu', 'crash', 'crashes',
-      'latency', 'connection', 'install', 'update'
-    ];
-    const looksMotorsport = motorsportTags.some((x) => tag.includes(x));
-    const hasMotorsportCue = motorsportCues.some((x) => text.includes(x));
-    const hasTechCue = techDriverCues.some((x) => text.includes(x));
-    if (looksMotorsport && hasTechCue && !hasMotorsportCue) return false;
+async function filterSubtopicsBySemanticFit(subtopics, corpus, bucket) {
+  const candidates = normalizeTagList(subtopics || []).slice(0, 6);
+  const selectedBucket = String(bucket || '').toLowerCase().trim();
+  if (!candidates.length || !selectedBucket || !MODEL_BUCKETS.includes(selectedBucket)) {
+    return candidates.slice(0, 4);
   }
 
-  return true;
+  const postVector = await getEmbeddingVector(String(corpus || '').slice(0, 2600));
+  if (!postVector.length) return candidates.slice(0, 4);
+
+  const kept = [];
+  for (const topic of candidates) {
+    const vec = await getEmbeddingVector(`topic: ${topic}`);
+    if (!vec.length) {
+      kept.push(topic);
+      continue;
+    }
+
+    const postScore = cosineSimilarity(postVector, vec);
+    if (!Number.isFinite(postScore) || postScore < 0.14) continue;
+
+    const bucketScores = await scoreTaxonomy(vec, BUCKET_TAXONOMY, 'bucket-subtopic');
+    if (!bucketScores.length) {
+      kept.push(topic);
+      continue;
+    }
+
+    const best = bucketScores[0];
+    const selected = bucketScores.find((x) => x.tag === selectedBucket);
+    const selectedScore = Number(selected?.score || 0);
+    const bestScore = Number(best?.score || 0);
+    if (best?.tag === selectedBucket || selectedScore >= bestScore - 0.03) {
+      kept.push(topic);
+    }
+  }
+
+  return normalizeTagList(kept).slice(0, 4);
 }
 
 function coerceAllowedTag(value, allowed) {
