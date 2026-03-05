@@ -83,7 +83,7 @@ class SidecarManager {
 
     if (await this.ollamaResponding()) {
       this.state.ollama = { ...this.state.ollama, available: true, running: true, source: 'external', error: '' };
-      await this.ensureOllamaModel(null);
+      await this.ensureOllamaModels(ollamaBin || 'ollama');
       return;
     }
 
@@ -116,7 +116,7 @@ class SidecarManager {
 
       await this.waitFor(async () => this.ollamaResponding(), 20000, 500);
       this.state.ollama = { ...this.state.ollama, available: true, running: true, source: 'bundled', error: '' };
-      await this.ensureOllamaModel(ollamaBin);
+      await this.ensureOllamaModels(ollamaBin);
     } catch (error) {
       this.state.ollama = {
         ...this.state.ollama,
@@ -129,26 +129,60 @@ class SidecarManager {
     }
   }
 
-  async ensureOllamaModel(ollamaBin) {
-    const modelName = 'nomic-embed-text';
+  async ensureOllamaModels(ollamaBin) {
+    const requiredModels = Array.from(
+      new Set([
+        String(process.env.OLLAMA_MODEL || 'llama3.2:3b').trim(),
+        String(process.env.OLLAMA_EMBED_MODEL || 'nomic-embed-text').trim()
+      ].filter(Boolean))
+    );
+
     const tags = await this.fetchOllamaTags();
-    const exists = tags.some((tag) => String(tag.name || '').startsWith(`${modelName}:`) || tag.name === modelName);
-    if (exists) {
+    const missing = requiredModels.filter((modelName) => !this.ollamaModelExists(tags, modelName));
+    if (!missing.length) {
       this.state.ollama.modelReady = true;
       return;
     }
 
     this.state.ollama.modelReady = false;
     if (!ollamaBin) return;
+    this.state.ollama.error = `pulling models: ${missing.join(', ')}`;
 
-    spawn(ollamaBin, ['pull', modelName], {
+    for (const modelName of missing) {
+      this.pullOllamaModel(ollamaBin, modelName);
+    }
+  }
+
+  pullOllamaModel(ollamaBin, modelName) {
+    const child = spawn(ollamaBin, ['pull', modelName], {
       stdio: ['ignore', 'ignore', 'ignore'],
       env: { ...process.env },
       detached: false
-    }).on('exit', async () => {
+    });
+    child.on('error', () => {
+      this.state.ollama.error = `failed to pull model ${modelName}`;
+      this.state.ollama.modelReady = false;
+    });
+    child.on('exit', async () => {
+      const requiredModels = Array.from(
+        new Set([
+          String(process.env.OLLAMA_MODEL || 'llama3.2:3b').trim(),
+          String(process.env.OLLAMA_EMBED_MODEL || 'nomic-embed-text').trim()
+        ].filter(Boolean))
+      );
       const next = await this.fetchOllamaTags();
-      const ready = next.some((tag) => String(tag.name || '').startsWith(`${modelName}:`) || tag.name === modelName);
+      const ready = requiredModels.every((required) => this.ollamaModelExists(next, required));
       this.state.ollama.modelReady = ready;
+      this.state.ollama.error = ready ? '' : `waiting for models: ${requiredModels.join(', ')}`;
+    });
+  }
+
+  ollamaModelExists(tags, modelName) {
+    const clean = String(modelName || '').trim();
+    if (!clean) return false;
+    return tags.some((tag) => {
+      const name = String(tag?.name || '').trim();
+      return name === clean || name.startsWith(`${clean}:`) || clean.startsWith(`${name}:`);
     });
   }
 
