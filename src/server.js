@@ -1242,7 +1242,8 @@ async function buildSemanticTags({ autoTagEnabled, existingTags, text, blocks, l
   const namedPhrases = extractNamedPhraseTags(corpus).slice(0, 5);
   const ollamaTags = await generateTagsWithOllama(corpus, manual);
   const fallbackTags = extractKeywordTags(corpus, [...manual, ...namedPhrases]);
-  return normalizeTagList([...manual, ...namedPhrases, ...ollamaTags, ...fallbackTags]).slice(0, 12);
+  const merged = normalizeTagList([...manual, ...namedPhrases, ...ollamaTags, ...fallbackTags]).slice(0, 12);
+  return dropSubsumedTags(merged).slice(0, 10);
 }
 
 function buildTagCorpus(text, blocks, links) {
@@ -1293,11 +1294,16 @@ async function generateTagsWithOllama(corpus, existingTags) {
 }
 
 function extractKeywordTags(corpus, existingTags) {
-  const segmented = String(corpus || '').replace(/\n+/g, ' __sep__ ');
-  const base = segmented
-    .toLowerCase()
-    .replace(/https?:\/\/\S+/g, ' ')
-    .replace(/[^a-z0-9\s-]/g, ' ');
+  const segments = String(corpus || '')
+    .split(/\n+/)
+    .map((line) =>
+      String(line || '')
+        .toLowerCase()
+        .replace(/https?:\/\/\S+/g, ' ')
+        .replace(/[^a-z0-9\s-]/g, ' ')
+        .trim()
+    )
+    .filter(Boolean);
   const stop = new Set([
     'the', 'and', 'for', 'with', 'this', 'that', 'from', 'into', 'have', 'just', 'your', 'about', 'also', 'were',
     'been', 'will', 'would', 'there', 'their', 'they', 'them', 'then', 'than', 'what', 'when', 'where', 'while',
@@ -1314,21 +1320,21 @@ function extractKeywordTags(corpus, existingTags) {
     'ai', 'coding', 'music', 'gardening', '3d printing', 'ipfs', 'chirpy'
   ]);
 
-  const tokens = base.split(/\s+/).filter(Boolean);
   const unigramCounts = new Map();
   const bigramCounts = new Map();
 
-  for (let i = 0; i < tokens.length; i += 1) {
-    const token = tokens[i];
-    if (token === '__sep__') continue;
-    if (!isUsableTagToken(token, stop, weak)) continue;
-    unigramCounts.set(token, (unigramCounts.get(token) || 0) + 1);
+  for (const segment of segments) {
+    const tokens = segment.split(/\s+/).filter(Boolean);
+    for (let i = 0; i < tokens.length; i += 1) {
+      const token = tokens[i];
+      if (!isUsableTagToken(token, stop, weak)) continue;
+      unigramCounts.set(token, (unigramCounts.get(token) || 0) + 1);
 
-    const next = tokens[i + 1];
-    if (next === '__sep__') continue;
-    if (!isUsableTagToken(next, stop, weak)) continue;
-    const pair = `${token} ${next}`;
-    bigramCounts.set(pair, (bigramCounts.get(pair) || 0) + 1);
+      const next = tokens[i + 1];
+      if (!isUsableTagToken(next, stop, weak)) continue;
+      const pair = `${token} ${next}`;
+      bigramCounts.set(pair, (bigramCounts.get(pair) || 0) + 1);
+    }
   }
 
   const existing = new Set(normalizeTagList(existingTags));
@@ -1390,6 +1396,34 @@ function extractNamedPhraseTags(corpus) {
     out.push(phrase);
   }
   return out;
+}
+
+function dropSubsumedTags(tags) {
+  const list = Array.isArray(tags) ? tags : [];
+  const sorted = [...list].sort((a, b) => b.length - a.length);
+  const kept = [];
+
+  for (const tag of sorted) {
+    const lower = String(tag || '').trim().toLowerCase();
+    if (!lower) continue;
+    const isSubsumed = kept.some((k) => {
+      const bigger = String(k || '').toLowerCase();
+      if (!bigger.includes(lower)) return false;
+      if (bigger === lower) return true;
+      const lowWords = lower.split(/\s+/).filter(Boolean);
+      if (lowWords.length <= 1 && lower.length <= 5) return true;
+      return false;
+    });
+    if (!isSubsumed) kept.push(lower);
+  }
+
+  const originalOrder = [];
+  for (const tag of list) {
+    const lower = String(tag || '').trim().toLowerCase();
+    if (!lower) continue;
+    if (kept.includes(lower) && !originalOrder.includes(lower)) originalOrder.push(lower);
+  }
+  return originalOrder;
 }
 
 function isUsableTagToken(token, stop, weak) {
