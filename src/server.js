@@ -1301,7 +1301,11 @@ async function buildSemanticTags({ autoTagEnabled, existingTags, text, blocks, l
   const audienceTags = taxonomy.audiences.length
     ? taxonomy.audiences
     : await inferAudienceTags(corpus, bucketTags);
-  const entityTags = semantic.entities || [];
+  const entityTags = normalizeEntityTags({
+    entities: semantic.entities || [],
+    namedPhrases,
+    mediaTitles
+  });
   const highSignal = normalizeTagList([
     ...manual,
     ...namedPhrases,
@@ -1311,21 +1315,12 @@ async function buildSemanticTags({ autoTagEnabled, existingTags, text, blocks, l
     ...audienceTags
   ]);
 
-  const hasStrongSemanticSignal =
-    bucketTags.some((x) => x !== 'general') ||
-    audienceTags.some((x) => x !== 'general') ||
-    entityTags.length >= 1 ||
-    mediaTitles.length >= 1 ||
-    namedPhrases.length >= 1;
-
   // Strict audience-first mode:
   // Keep only who-cares signals (audiences), broad buckets, and concrete entities/titles.
   const curated = prioritizeAudienceTags(highSignal, { bucketTags, audienceTags, entityTags, mediaTitles, namedPhrases, manual });
 
-  const fallbackTags = hasStrongSemanticSignal
-    ? []
-    : extractKeywordTags(corpus, [...curated]);
-  const merged = normalizeTagList([...curated, ...fallbackTags]).slice(0, 12);
+  // Controlled output policy: no freeform phrase fallback tags.
+  const merged = normalizeTagList([...curated]).slice(0, 12);
   const compact = dropSubsumedTags(merged);
   const filtered = filterNamedPhraseFragments(compact, [...namedPhrases, ...mediaTitles]).slice(0, 10);
   return applyDisambiguationGuards(corpus, filtered);
@@ -1351,7 +1346,32 @@ function prioritizeAudienceTags(tags, context) {
   if (!ordered.some((x) => buckets.has(x)) && buckets.size) {
     ordered.push(...Array.from(buckets));
   }
-  return normalizeTagList(ordered).slice(0, 10);
+  const normalized = normalizeTagList(ordered).slice(0, 10);
+  const nonGeneral = normalized.filter((x) => x !== 'general');
+  return nonGeneral.length ? nonGeneral : normalized;
+}
+
+function normalizeEntityTags({ entities, namedPhrases, mediaTitles }) {
+  const raw = normalizeTagList([...(entities || [])]);
+  const anchors = new Set(normalizeTagList([...(namedPhrases || []), ...(mediaTitles || [])]));
+  const rejectWords = new Set([
+    'hitting', 'hard', 'stay', 'inside', 'morning', 'taking', 'feeling', 'need', 'go', 'back', 'work'
+  ]);
+  const out = [];
+
+  for (const tag of raw) {
+    if (!tag || isWeakTag(tag)) continue;
+    if (anchors.has(tag)) {
+      out.push(tag);
+      continue;
+    }
+    const words = tag.split(/\s+/).filter(Boolean);
+    if (words.length > 3) continue;
+    if (words.some((w) => rejectWords.has(w))) continue;
+    if (words.length >= 2 && words.every((w) => w.length <= 3)) continue;
+    out.push(tag);
+  }
+  return normalizeTagList(out).slice(0, 4);
 }
 
 function applyDisambiguationGuards(corpus, tags) {
