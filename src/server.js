@@ -1239,13 +1239,116 @@ async function buildSemanticTags({ autoTagEnabled, existingTags, text, blocks, l
   if (!autoTagEnabled) return manual;
 
   const corpus = buildTagCorpus(text, blocks, links);
+  const semantic = await analyzePostSemantics(corpus);
   const namedPhrases = extractNamedPhraseTags(corpus).slice(0, 5);
-  const bucketTags = await inferBucketTags(corpus, namedPhrases);
-  const ollamaTags = await generateTagsWithOllama(corpus, manual);
-  const fallbackTags = extractKeywordTags(corpus, [...manual, ...namedPhrases, ...bucketTags]);
-  const merged = normalizeTagList([...manual, ...namedPhrases, ...bucketTags, ...ollamaTags, ...fallbackTags]).slice(0, 12);
+  const bucketTags = semantic.buckets.length ? semantic.buckets : await inferBucketTags(corpus, namedPhrases);
+  const subtopicTags = semantic.subtopics || [];
+  const entityTags = semantic.entities || [];
+  const ollamaTags = semantic.usedModel ? [] : await generateTagsWithOllama(corpus, manual);
+  const fallbackTags = extractKeywordTags(corpus, [...manual, ...namedPhrases, ...bucketTags, ...subtopicTags, ...entityTags]);
+  const merged = normalizeTagList([
+    ...manual,
+    ...namedPhrases,
+    ...entityTags,
+    ...bucketTags,
+    ...subtopicTags,
+    ...ollamaTags,
+    ...fallbackTags
+  ]).slice(0, 14);
   const compact = dropSubsumedTags(merged);
   return filterNamedPhraseFragments(compact, namedPhrases).slice(0, 10);
+}
+
+async function analyzePostSemantics(corpus) {
+  const allowedBuckets = [
+    'sports',
+    'entertainment',
+    'technology',
+    'business',
+    'finance',
+    'politics',
+    'science',
+    'health',
+    'education',
+    'gaming',
+    'food',
+    'travel',
+    'lifestyle',
+    'family',
+    'news',
+    'music',
+    'movies',
+    'tv',
+    'general'
+  ];
+  const text = String(corpus || '').trim();
+  if (!text || text.length < 6) {
+    return { usedModel: false, buckets: ['general'], subtopics: [], entities: [] };
+  }
+
+  const host = String(process.env.OLLAMA_HOST || 'http://127.0.0.1:11434').trim();
+  const model = String(process.env.OLLAMA_MODEL || 'llama3.2:3b').trim();
+  const prompt = [
+    'Analyze this social post semantically.',
+    'Return strict JSON only with keys: buckets, subtopics, entities.',
+    `buckets: array with 1-3 items from this fixed list: ${allowedBuckets.join(', ')}`,
+    'subtopics: array of 0-5 concise inferred topics (1-4 words each), can use world knowledge and context.',
+    'entities: array of 0-5 notable names/titles/teams/products in the post.',
+    'No markdown. No explanation. JSON object only.',
+    'Post:',
+    text.slice(0, 2800)
+  ].join('\n');
+
+  try {
+    const response = await fetch(`${host}/api/generate`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model,
+        prompt,
+        stream: false,
+        options: { temperature: 0.1 }
+      })
+    });
+    if (!response.ok) {
+      return { usedModel: false, buckets: [], subtopics: [], entities: [] };
+    }
+    const data = await response.json();
+    const raw = String(data?.response || '').trim();
+    const parsed = parseLooseJsonObject(raw);
+    if (!parsed || typeof parsed !== 'object') {
+      return { usedModel: false, buckets: [], subtopics: [], entities: [] };
+    }
+
+    const allowed = new Set(allowedBuckets);
+    const buckets = normalizeTagList(Array.isArray(parsed.buckets) ? parsed.buckets : [])
+      .filter((x) => allowed.has(x))
+      .slice(0, 3);
+    const subtopics = normalizeTagList(Array.isArray(parsed.subtopics) ? parsed.subtopics : []).slice(0, 5);
+    const entities = normalizeTagList(Array.isArray(parsed.entities) ? parsed.entities : []).slice(0, 5);
+    return { usedModel: true, buckets, subtopics, entities };
+  } catch (_error) {
+    return { usedModel: false, buckets: [], subtopics: [], entities: [] };
+  }
+}
+
+function parseLooseJsonObject(raw) {
+  const text = String(raw || '').trim();
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch (_error) {
+    // continue
+  }
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  if (start === -1 || end === -1 || end <= start) return null;
+  const slice = text.slice(start, end + 1);
+  try {
+    return JSON.parse(slice);
+  } catch (_error) {
+    return null;
+  }
 }
 
 function buildTagCorpus(text, blocks, links) {
