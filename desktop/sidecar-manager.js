@@ -542,7 +542,13 @@ class SidecarManager {
       : path.join(__dirname, '..', 'resources', 'bin');
     const direct = path.join(root, platformKey, `${name}${suffix}`);
     const fallback = path.join(root, `${name}${suffix}`);
-    return this.firstExisting([direct, fallback]);
+    const candidates = [direct, fallback];
+    if (platform === 'darwin') {
+      // Allow universal macOS binaries placed in either folder to satisfy both Intel and Apple Silicon.
+      candidates.push(path.join(root, 'darwin-arm64', `${name}${suffix}`));
+      candidates.push(path.join(root, 'darwin-x64', `${name}${suffix}`));
+    }
+    return this.firstExisting(candidates);
   }
 
   firstExisting(candidates) {
@@ -623,13 +629,9 @@ class SidecarManager {
     add('/opt/homebrew/bin/ollama');
     add('/usr/local/bin/ollama');
     add('/Applications/Ollama.app/Contents/Resources/ollama');
-    add('ollama');
     const existing = [];
     for (const candidate of out) {
-      if (candidate === 'ollama') {
-        existing.push(candidate);
-        continue;
-      }
+      if (/\/Contents\/MacOS\/Ollama$/i.test(candidate)) continue;
       try {
         await fs.access(candidate);
         existing.push(candidate);
