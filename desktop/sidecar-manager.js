@@ -164,7 +164,7 @@ class SidecarManager {
         available: true,
         running: false,
         source: 'bundled',
-        error: error.message || 'ollama startup failed',
+        error: this.describeOllamaStartupError(error),
         modelReady: false
       };
     }
@@ -588,6 +588,21 @@ class SidecarManager {
     } catch (_error) {
       // keep going; spawn will surface real failure
     }
+    if (process.platform === 'darwin') {
+      try {
+        await this.execFileSafe('xattr', ['-d', 'com.apple.quarantine', filePath], 3000);
+      } catch (_error) {
+        // best-effort: may not exist or may already be clear
+      }
+    }
+  }
+
+  describeOllamaStartupError(error) {
+    const msg = String(error?.message || 'ollama startup failed').trim();
+    if (process.platform === 'darwin' && /signal=SIGKILL/i.test(msg)) {
+      return 'ollama blocked by macOS security or invalid binary (SIGKILL). Install/open Ollama.app once or replace bundled binary for this architecture.';
+    }
+    return msg;
   }
 
   async resolveSystemOllamaCandidates() {
