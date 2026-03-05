@@ -218,6 +218,8 @@ const AUDIENCE_TAXONOMY = [
   { tag: 'network-engineers', desc: 'networking professionals focused on latency, connectivity, routing' },
   { tag: 'sysadmins', desc: 'system administrators and infrastructure maintainers' },
   { tag: 'devops', desc: 'deployment, CI/CD, infrastructure automation practitioners' },
+  { tag: 'audio-engineers', desc: 'mixing, mastering, EQ, signal chain, and recording practitioners' },
+  { tag: 'music-producers', desc: 'beat making, arranging, DAW workflows, and music production creators' },
   { tag: 'makers', desc: 'hands-on builders working with tools, prototyping, fabrication' },
   { tag: '3d-printing', desc: '3d printing hobbyists and professionals using nozzles, filament, STL files' },
   { tag: 'gardeners', desc: 'people interested in plants, soil, seeds, growing cycles' },
@@ -1354,10 +1356,13 @@ function prioritizeAudienceTags(tags, context) {
 function normalizeEntityTags({ entities, namedPhrases, mediaTitles }) {
   const raw = normalizeTagList([...(entities || [])]);
   const anchors = new Set(normalizeTagList([...(namedPhrases || []), ...(mediaTitles || [])]));
+  if (!anchors.size) return [];
   const rejectWords = new Set([
-    'hitting', 'hard', 'stay', 'inside', 'morning', 'taking', 'feeling', 'need', 'go', 'back', 'work'
+    'hitting', 'hard', 'stay', 'inside', 'morning', 'taking', 'feeling', 'need', 'go', 'back', 'work',
+    'spent', 'hours', 'finally', 'solid', 'still', 'killing', 'bit', 'muddy', 'space', 'window'
   ]);
   const out = [];
+  const anchorTokenSets = Array.from(anchors).map((x) => x.split(/\s+/).filter(Boolean));
 
   for (const tag of raw) {
     if (!tag || isWeakTag(tag)) continue;
@@ -1366,9 +1371,11 @@ function normalizeEntityTags({ entities, namedPhrases, mediaTitles }) {
       continue;
     }
     const words = tag.split(/\s+/).filter(Boolean);
-    if (words.length > 3) continue;
+    if (words.length > 4 || words.length < 2) continue;
     if (words.some((w) => rejectWords.has(w))) continue;
     if (words.length >= 2 && words.every((w) => w.length <= 3)) continue;
+    const overlapsAnchor = anchorTokenSets.some((tokens) => words.filter((w) => tokens.includes(w)).length >= 2);
+    if (!overlapsAnchor) continue;
     out.push(tag);
   }
   return normalizeTagList(out).slice(0, 4);
@@ -1504,6 +1511,8 @@ async function inferAudienceTags(corpus, bucketTags) {
     'baseball-fans',
     'gamers',
     'music-fans',
+    'audio-engineers',
+    'music-producers',
     'creators',
     'developers',
     'makers',
@@ -1530,10 +1539,15 @@ async function inferAudienceTags(corpus, bucketTags) {
 
   const modelAudiences = await inferAudienceTagsWithOllama(text, bucketTags, allowedAudiences);
   const keywordAudiences = inferAudienceTagsByKeyword(text).slice(0, 4);
-  const modelOnlyGeneral = modelAudiences.length > 0 && modelAudiences.every((x) => x === 'general');
-  if (!modelAudiences.length || modelOnlyGeneral) {
+  const merged = normalizeTagList([...modelAudiences, ...keywordAudiences]);
+  const nonGeneral = merged.filter((x) => x !== 'general');
+  if (nonGeneral.length) return nonGeneral.slice(0, 4);
+
+  const fromBuckets = mapBucketsToAudiences(bucketTags, allowedAudiences);
+  if (fromBuckets.length) return fromBuckets.slice(0, 4);
+  if (!modelAudiences.length) {
     if (keywordAudiences.some((x) => x !== 'general')) return keywordAudiences;
-    return modelAudiences.length ? modelAudiences.slice(0, 4) : keywordAudiences;
+    return keywordAudiences;
   }
   return modelAudiences.slice(0, 4);
 }
@@ -1581,10 +1595,13 @@ function inferAudienceTagsByKeyword(text) {
   const checks = [
     ['3d-printing', ['stl', 'nozzle', 'flow rate', 'filament', 'extruder', 'print bed', 'layer height', 'slicer']],
     ['makers', ['stl', 'nozzle', 'flow rate', 'filament', 'extruder', 'garage bench', 'workbench']],
-    ['gardeners', ['planting', 'seeds', 'roots', 'soil', 'freeze', 'magnolia', 'garden', 'sprout']],
+    ['gardeners', ['planting', 'seeds', 'roots', 'soil', 'freeze', 'magnolia', 'garden', 'sprout', 'fig', 'cedar fever', 'pollen', 'bushes']],
     ['network-engineers', ['latency', 'connection', 'bridge', 'packet', 'network', 'throughput']],
     ['sysadmins', ['troubleshooting', 'incident', 'outage', 'logs', 'service']],
     ['devops', ['deploy', 'deployment', 'pipeline', 'infra', 'kubernetes', 'docker']],
+    ['audio-engineers', ['eq', 'mix', 'low end', 'muddy', 'mastering', 'compressor', 'signal chain', 'headroom']],
+    ['music-producers', ['daw', 'arrangement', 'beat', 'vst', 'plugin', 'mix', 'mastering', 'low end']],
+    ['music-fans', ['mix', 'track', 'breakdown', 'chorus', 'verse', 'bassline']],
     ['developers', ['code', 'coding', 'bug', 'debug', 'api', 'javascript', 'python']],
     ['movie-fans', ['movie', 'film', 'cinema']],
     ['tv-fans', ['series', 'episode', 'show', 'season']],
@@ -1597,6 +1614,28 @@ function inferAudienceTagsByKeyword(text) {
   }
   if (!out.length) out.push('general');
   return normalizeTagList(out);
+}
+
+function mapBucketsToAudiences(bucketTags, allowedAudiences) {
+  const buckets = new Set(normalizeTagList(bucketTags || []));
+  const allowed = new Set(normalizeTagList(allowedAudiences || []));
+  const map = {
+    technology: ['developers'],
+    sports: ['sports-fans'],
+    music: ['music-fans'],
+    movies: ['movie-fans'],
+    tv: ['tv-fans'],
+    education: ['educators'],
+    lifestyle: ['makers'],
+    health: ['health-fitness']
+  };
+  const out = [];
+  for (const bucket of buckets) {
+    for (const candidate of map[bucket] || []) {
+      if (allowed.has(candidate) && !out.includes(candidate)) out.push(candidate);
+    }
+  }
+  return out;
 }
 
 function parseLooseJsonObject(raw) {
@@ -1937,14 +1976,14 @@ async function inferBucketTags(corpus, namedPhrases) {
     lifestyle: [
       'daily', 'routine', 'home', 'hobby', 'life',
       'planting', 'seeds', 'roots', 'soil', 'garden', 'magnolia', 'freeze',
-      'stl', 'filament', 'nozzle', 'flow rate', 'extruder', 'workbench'
+      'stl', 'filament', 'nozzle', 'flow rate', 'extruder', 'workbench',
+      'cedar fever', 'fig', 'bushes', 'pollen'
     ],
     family: ['family', 'kids', 'parent', 'child'],
     news: ['breaking', 'update', 'headline', 'report'],
-    music: ['song', 'album', 'playlist', 'artist', 'band'],
+    music: ['song', 'album', 'playlist', 'artist', 'band', 'mix', 'eq', 'mastering', 'daw', 'low end', 'bass', 'track'],
     movies: ['movie', 'film', 'cinema', 'box office', 'director'],
-    tv: ['tv', 'series', 'episode', 'season', 'netflix', 'hulu', 'hbo'],
-    movies: ['movie', 'film', 'cinema', 'box office', 'director']
+    tv: ['tv', 'series', 'episode', 'season', 'netflix', 'hulu', 'hbo']
   };
 
   const scored = [];
