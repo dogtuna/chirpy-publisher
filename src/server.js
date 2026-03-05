@@ -1552,7 +1552,20 @@ async function buildSemanticTags({ autoTagEnabled, existingTags, text, blocks, l
   if (!autoTagEnabled) return manual;
 
   const corpus = buildTagCorpus(text, blocks, links);
-  const semantic = await classifyPostSemanticRoute(corpus);
+  let semantic = await classifyPostSemanticRoute(corpus);
+  if (
+    semantic.bucket === 'general'
+    && semantic.audience === 'general'
+    && !(Array.isArray(semantic.subtopics) && semantic.subtopics.length)
+  ) {
+    const fallback = await resolveSemanticFallback(corpus);
+    semantic = {
+      bucket: fallback.bucket || semantic.bucket,
+      audience: fallback.audience || semantic.audience,
+      subtopics: normalizeTagList([...(semantic.subtopics || []), ...(fallback.subtopics || [])]).slice(0, 3),
+      entities: normalizeTagList([...(semantic.entities || []), ...(fallback.entities || [])]).slice(0, 2)
+    };
+  }
   const inferredNiches = await inferNicheDepthTags(corpus, semantic.bucket, semantic.audience);
   const bucketTag = normalizeTagList([semantic.bucket]).filter((x) => MODEL_BUCKETS.includes(x));
   const audienceTag = normalizeTagList([semantic.audience]).filter((x) => MODEL_AUDIENCES.includes(x));
@@ -1577,6 +1590,31 @@ async function buildSemanticTags({ autoTagEnabled, existingTags, text, blocks, l
   const compact = dropSubsumedTags(merged);
   const filtered = compact.slice(0, 10);
   return applyDisambiguationGuards(corpus, filtered);
+}
+
+async function resolveSemanticFallback(corpus) {
+  const text = String(corpus || '').trim();
+  if (!text) return { bucket: 'general', audience: 'general', subtopics: [], entities: [] };
+
+  const namedPhrases = extractNamedPhraseTags(text);
+  const keywordBuckets = await inferBucketTags(text, namedPhrases);
+  const semanticTaxonomy = await inferSemanticTaxonomy(text);
+  const mergedBuckets = normalizeTagList([...(keywordBuckets || []), ...((semanticTaxonomy && semanticTaxonomy.buckets) || [])])
+    .filter((x) => MODEL_BUCKETS.includes(x));
+  const bucket = mergedBuckets.find((x) => x !== 'general') || mergedBuckets[0] || 'general';
+
+  const audienceFromBuckets = mapBucketsToAudiences(mergedBuckets.length ? mergedBuckets : [bucket], MODEL_AUDIENCES);
+  const inferredAudiences = await inferAudienceTags(text, mergedBuckets.length ? mergedBuckets : [bucket]);
+  const mergedAudiences = normalizeTagList([...(inferredAudiences || []), ...audienceFromBuckets, ...((semanticTaxonomy && semanticTaxonomy.audiences) || [])])
+    .filter((x) => MODEL_AUDIENCES.includes(x));
+  const audience = mergedAudiences.find((x) => x !== 'general') || mergedAudiences[0] || 'general';
+
+  return {
+    bucket,
+    audience,
+    subtopics: normalizeTagList(namedPhrases).slice(0, 2),
+    entities: []
+  };
 }
 
 async function fetchJsonWithTimeout(url, options, timeoutMs = OLLAMA_TIMEOUT_MS) {
