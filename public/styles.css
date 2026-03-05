@@ -769,3 +769,39 @@ h2 {
         margin-right: 0;
     }
 }
+
+.toast-stack {
+    position: fixed;
+    right: 1rem;
+    bottom: 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+    z-index: 5000;
+    pointer-events: none;
+}
+
+.toast {
+    pointer-events: auto;
+    min-width: 240px;
+    max-width: 360px;
+    padding: 0.55rem 0.7rem;
+    border-radius: 12px;
+    border: 1px solid var(--line);
+    background: #fffdf9;
+    color: var(--ink);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
+    font-size: 0.82rem;
+}
+
+.toast.info {
+    border-color: #c7d6ea;
+}
+
+.toast.success {
+    border-color: #9ad8b3;
+}
+
+.toast.error {
+    border-color: #e4a8a8;
+}

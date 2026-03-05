@@ -38,6 +38,8 @@
         </div>
         <details>
           <summary class="sub small">Desktop Chirper Profile</summary>
+          <p id="desktopEngineStatus" class="sub small">Runtime: checking...</p>
+          <p id="desktopModelStatus" class="sub small">Model: checking...</p>
           <label class="field">
             <span>Chirper Nickname</span>
             <input id="desktopNickname" type="text" placeholder="How you appear in Chirpers" />
@@ -236,6 +238,7 @@
       <div class="block-body"></div>
     </article>
   </template>
+  <div id="toastStack" class="toast-stack" aria-live="polite" aria-atomic="false"></div>
   <script src="/app.js"></script>
 </body>
 

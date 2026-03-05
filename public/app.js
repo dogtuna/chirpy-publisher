@@ -40,6 +40,9 @@ const els = {
   desktopInterests: document.getElementById("desktopInterests"),
   saveDesktopProfile: document.getElementById("saveDesktopProfile"),
   desktopProfileStatus: document.getElementById("desktopProfileStatus"),
+  desktopEngineStatus: document.getElementById("desktopEngineStatus"),
+  desktopModelStatus: document.getElementById("desktopModelStatus"),
+  toastStack: document.getElementById("toastStack"),
   userDid: document.getElementById("userDid"),
   ipnsKey: document.getElementById("ipnsKey"),
   tags: document.getElementById("tags"),
@@ -84,7 +87,10 @@ const state = {
   nodeName: "",
   nodeNameAvailable: null,
   nodeNameCheckTimer: null,
-  desktopProfile: null
+  desktopProfile: null,
+  desktopRuntimeStatus: null,
+  lastModelPhase: "",
+  lastModelDetail: ""
 };
 
 boot();
@@ -104,11 +110,13 @@ function boot() {
   loadSetup();
   loadNodeIdentity();
   loadDesktopProfile();
+  pollDesktopRuntimeStatus();
   autoUpgradeProfilesSilently();
   loadHistory();
   loadUsers();
   scheduleSetupPrompt();
   setInterval(loadUsers, 30000);
+  setInterval(pollDesktopRuntimeStatus, 6000);
 }
 
 function initializeGlobalFrameDefaults() {
@@ -497,6 +505,8 @@ async function loadDesktopProfile() {
   if (!els.desktopProfileStatus) return;
   if (!window.chirpyDesktop) {
     els.desktopProfileStatus.textContent = "Desktop-only setting (available in Electron app).";
+    if (els.desktopEngineStatus) els.desktopEngineStatus.textContent = "Runtime: browser mode.";
+    if (els.desktopModelStatus) els.desktopModelStatus.textContent = "Model: unavailable in browser mode.";
     if (els.saveDesktopProfile) els.saveDesktopProfile.disabled = true;
     return;
   }
@@ -513,6 +523,99 @@ async function loadDesktopProfile() {
   } catch (_error) {
     els.desktopProfileStatus.textContent = "Could not load desktop profile right now.";
   }
+}
+
+async function pollDesktopRuntimeStatus() {
+  if (!window.chirpyDesktop) return;
+  try {
+    const result = await window.chirpyDesktop.getStatus();
+    if (!result?.ok) throw new Error("status unavailable");
+    state.desktopRuntimeStatus = result;
+    renderDesktopRuntimeStatus(result);
+    maybeNotifyModelStatus(result);
+  } catch (_error) {
+    if (els.desktopEngineStatus) els.desktopEngineStatus.textContent = "Runtime: unavailable.";
+    if (els.desktopModelStatus) els.desktopModelStatus.textContent = "Model: status unavailable.";
+  }
+}
+
+function renderDesktopRuntimeStatus(status) {
+  const sidecars = status?.sidecars || {};
+  const ipfs = sidecars.ipfs || {};
+  const ollama = sidecars.ollama || {};
+
+  const ipfsLabel = ipfs.running ? `IPFS ${ipfs.source || "running"}` : `IPFS offline`;
+  const ollamaLabel = ollama.running ? `Ollama ${ollama.source || "running"}` : "Ollama offline";
+  if (els.desktopEngineStatus) {
+    els.desktopEngineStatus.textContent = `Runtime: ${ipfsLabel} | ${ollamaLabel}`;
+  }
+
+  if (!els.desktopModelStatus) return;
+  const phase = getModelPhase(status);
+  const detail = formatModelDetail(status);
+  const label = phase.charAt(0).toUpperCase() + phase.slice(1);
+  els.desktopModelStatus.textContent = `Model: ${label}${detail ? ` (${detail})` : ""}`;
+}
+
+function getModelPhase(status) {
+  const ollama = status?.sidecars?.ollama || {};
+  const error = String(ollama.error || "").toLowerCase();
+  if (!ollama.available) return "unavailable";
+  if (!ollama.running) return "offline";
+  if (ollama.modelReady) return "ready";
+  if (error.includes("pulling") || error.includes("waiting")) return "downloading";
+  if (error) return "error";
+  return "checking";
+}
+
+function formatModelDetail(status) {
+  const ollama = status?.sidecars?.ollama || {};
+  const error = String(ollama.error || "").trim();
+  if (!error) return "";
+  if (error.toLowerCase().startsWith("pulling models:")) {
+    return error.replace(/^pulling models:\s*/i, "");
+  }
+  if (error.toLowerCase().startsWith("waiting for models:")) {
+    return error.replace(/^waiting for models:\s*/i, "");
+  }
+  return error;
+}
+
+function maybeNotifyModelStatus(status) {
+  const phase = getModelPhase(status);
+  const detail = formatModelDetail(status);
+  const key = `${phase}:${detail}`;
+  if (key === `${state.lastModelPhase}:${state.lastModelDetail}`) return;
+
+  state.lastModelPhase = phase;
+  state.lastModelDetail = detail;
+
+  if (phase === "checking") {
+    pushToast("Checking Ollama models...", "info");
+    return;
+  }
+  if (phase === "downloading") {
+    pushToast(`Downloading model${detail ? `: ${detail}` : "..."}`, "info");
+    return;
+  }
+  if (phase === "ready") {
+    pushToast("Model download complete. AI tagging is ready.", "success");
+    return;
+  }
+  if (phase === "error") {
+    pushToast(`Model error: ${detail || "unknown error"}`, "error");
+  }
+}
+
+function pushToast(message, kind) {
+  if (!els.toastStack) return;
+  const node = document.createElement("div");
+  node.className = `toast ${kind || "info"}`;
+  node.textContent = String(message || "");
+  els.toastStack.appendChild(node);
+  setTimeout(() => {
+    node.remove();
+  }, 5000);
 }
 
 async function saveDesktopProfile() {
