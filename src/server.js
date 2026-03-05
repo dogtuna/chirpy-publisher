@@ -16,6 +16,7 @@ const uploadRoot = path.join(runtimeRoot, 'uploads');
 const app = express();
 const PORT = Number.parseInt(process.env.PORT || '3020', 10);
 const BIND_HOST = String(process.env.CHIRPY_BIND_HOST || '0.0.0.0').trim() || '0.0.0.0';
+const IPFS_CMD = String(process.env.CHIRPY_IPFS_BIN || 'ipfs').trim() || 'ipfs';
 
 const presenceTopic = process.env.CHIRPY_PRESENCE_TOPIC || 'chirpy.users.v1';
 const publishTopic = process.env.CHIRPY_PUBSUB_TOPIC || 'chirpy.new-post';
@@ -260,7 +261,7 @@ app.post('/api/ipfs/keys', async (req, res) => {
   }
 
   try {
-    await runExec('ipfs', ['key', 'gen', safeName, '--type=rsa', '--size=2048'], 15000);
+    await runExec(IPFS_CMD, ['key', 'gen', safeName, '--type=rsa', '--size=2048'], 15000);
     const listed = await listIpfsKeysSafe();
     res.json({ ok: true, generatedName: safeName, keys: listed.keys || [] });
   } catch (error) {
@@ -709,8 +710,8 @@ async function maybePublishStage(stageDir, stageId, userDid, ipnsKey) {
   }
 
   try {
-    const rootCid = (await runExec('ipfs', ['add', '-Qr', stageDir], 45000)).trim();
-    const ipnsPublishResult = (await runExec('ipfs', ['name', 'publish', '--key', ipnsKey, `/ipfs/${rootCid}`], 45000)).trim();
+    const rootCid = (await runExec(IPFS_CMD, ['add', '-Qr', stageDir], 45000)).trim();
+    const ipnsPublishResult = (await runExec(IPFS_CMD, ['name', 'publish', '--key', ipnsKey, `/ipfs/${rootCid}`], 45000)).trim();
     const pubPayload = JSON.stringify({
       schema: 'chirpy.publish/1.0.0',
       stageId,
@@ -722,7 +723,7 @@ async function maybePublishStage(stageDir, stageId, userDid, ipnsKey) {
 
     let pubsubPublished = false;
     try {
-      await runExec('ipfs', ['pubsub', 'pub', publishTopic, pubPayload], 10000);
+      await runExec(IPFS_CMD, ['pubsub', 'pub', publishTopic, pubPayload], 10000);
       pubsubPublished = true;
     } catch (_error) {
       pubsubPublished = false;
@@ -739,7 +740,7 @@ async function listIpfsKeysSafe() {
     return { available: false, keys: [] };
   }
   try {
-    const output = await runExec('ipfs', ['key', 'list', '-l'], 12000);
+    const output = await runExec(IPFS_CMD, ['key', 'list', '-l'], 12000);
     const keys = output
       .split('\n')
       .map((line) => line.trim())
@@ -758,7 +759,7 @@ async function listIpfsKeysSafe() {
 
 async function loadPeerId() {
   try {
-    const id = (await runExec('ipfs', ['id', '-f=<id>'], 4000)).trim();
+    const id = (await runExec(IPFS_CMD, ['id', '-f=<id>'], 4000)).trim();
     return id || null;
   } catch (_error) {
     return null;
@@ -767,7 +768,7 @@ async function loadPeerId() {
 
 function startPresenceSubscriber() {
   if (presenceState.subscriber) return;
-  const child = spawn('ipfs', ['pubsub', 'sub', presenceTopic], { stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(IPFS_CMD, ['pubsub', 'sub', presenceTopic], { stdio: ['ignore', 'pipe', 'pipe'] });
   presenceState.subscriber = child;
 
   const lines = readline.createInterface({ input: child.stdout });
@@ -805,7 +806,7 @@ async function publishHeartbeat() {
     timestamp: new Date().toISOString()
   });
 
-  await runExec('ipfs', ['pubsub', 'pub', presenceTopic, payload], 10000);
+  await runExec(IPFS_CMD, ['pubsub', 'pub', presenceTopic, payload], 10000);
 
   recordUser({
     id: presenceState.instanceId,
