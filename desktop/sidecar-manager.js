@@ -9,6 +9,7 @@ class SidecarManager {
     this.isPackaged = Boolean(isPackaged);
     this.ipfsProcess = null;
     this.ollamaProcess = null;
+    this.ollamaPulls = new Map();
     this.state = {
       ipfs: { available: false, running: false, source: 'none', error: '', binaryPath: '' },
       ollama: { available: false, running: false, source: 'none', error: '', binaryPath: '', modelReady: false }
@@ -149,7 +150,7 @@ class SidecarManager {
     this.state.ollama.error = `pulling models: ${missing.join(', ')}`;
 
     for (const modelName of missing) {
-      this.pullOllamaModel(ollamaBin, modelName);
+      if (!this.ollamaPulls.has(modelName)) this.pullOllamaModel(ollamaBin, modelName);
     }
   }
 
@@ -159,11 +160,19 @@ class SidecarManager {
       env: { ...process.env },
       detached: false
     });
+    this.ollamaPulls.set(modelName, child);
     child.on('error', () => {
       this.state.ollama.error = `failed to pull model ${modelName}`;
       this.state.ollama.modelReady = false;
+      this.ollamaPulls.delete(modelName);
     });
-    child.on('exit', async () => {
+    child.on('exit', async (code, signal) => {
+      this.ollamaPulls.delete(modelName);
+      if (code && code !== 0) {
+        this.state.ollama.modelReady = false;
+        this.state.ollama.error = `model pull failed (${modelName}) code ${code}${signal ? ` signal ${signal}` : ''}`;
+        return;
+      }
       const requiredModels = Array.from(
         new Set([
           String(process.env.OLLAMA_MODEL || 'llama3.2:3b').trim(),
@@ -242,6 +251,10 @@ class SidecarManager {
   async shutdown() {
     await this.stopChild(this.ipfsProcess);
     await this.stopChild(this.ollamaProcess);
+    for (const child of this.ollamaPulls.values()) {
+      await this.stopChild(child);
+    }
+    this.ollamaPulls.clear();
     this.ipfsProcess = null;
     this.ollamaProcess = null;
   }
