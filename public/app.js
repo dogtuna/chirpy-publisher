@@ -211,6 +211,7 @@ function bindControls() {
     persistProfiles();
     renderProfileSummary();
     renderIdentityIndicators();
+    announceNodeProfile();
   });
   els.ipnsKey.addEventListener("input", () => {
     const profile = getActiveProfile();
@@ -219,6 +220,7 @@ function bindControls() {
     persistProfiles();
     renderProfileSummary();
     renderIdentityIndicators();
+    announceNodeProfile();
   });
 
   document.addEventListener("click", (event) => {
@@ -699,6 +701,7 @@ function applyActiveProfileToForm() {
   enforceVisibilityPolicy();
   renderProfileSummary();
   renderIdentityIndicators();
+  announceNodeProfile();
 }
 
 function renderProfileSummary() {
@@ -1280,11 +1283,15 @@ async function loadUsers() {
       item.className = "history-item";
       const name = escapeHtml(user.name || "Unnamed node");
       const peerId = escapeHtml(user.peerId || user.id || "");
+      const did = escapeHtml(user.profileDid || "");
+      const ipns = escapeHtml(user.profileIpnsKey || "");
       const last = formatActivity(user.lastActivity);
       const stateText = user.active ? "active" : "idle";
       item.innerHTML = `
         <strong>${name}</strong>
         <div class="history-main">${peerId}</div>
+        <div class="history-main">${did ? `did ${did}` : "did unknown"}</div>
+        <div class="history-main">${ipns ? `ipns ${ipns}` : "ipns unknown"}</div>
         <div class="history-main">${stateText} • ${escapeHtml(last)}</div>
       `;
       els.usersList.appendChild(item);
@@ -1528,6 +1535,23 @@ function formatActivity(value) {
   const date = new Date(value || "");
   if (Number.isNaN(date.getTime())) return "unknown";
   return date.toLocaleString();
+}
+
+async function announceNodeProfile() {
+  const profile = getActiveProfile();
+  if (!profile) return;
+  try {
+    await fetch("/api/network-node/profile", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        did: String(profile.userDid || "").trim(),
+        ipnsKey: String(profile.ipnsKey || "").trim()
+      })
+    });
+  } catch (_error) {
+    // ignore network announce failures in UI flow
+  }
 }
 
 function normalizeNodeNameLocal(value) {

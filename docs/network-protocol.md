@@ -59,6 +59,7 @@ Purpose: lightweight live discovery over PubSub.
     "peerId": { "type": "string" },
     "name": { "type": "string", "minLength": 3, "maxLength": 40 },
     "profileDid": { "type": "string" },
+    "profileIpnsKey": { "type": "string" },
     "version": { "type": "string" },
     "timestamp": { "type": "string", "format": "date-time" }
   },
@@ -139,6 +140,39 @@ Purpose: describe encrypted post payloads without exposing plaintext.
     }
   },
   "additionalProperties": true
+}
+```
+
+## 4) Link Card Metadata (Interactive Lens)
+
+Purpose: strict metadata contract for interactive link rendering (e.g., playable embeds).
+
+```json
+{
+  "$id": "chirpy.link-card.v1",
+  "type": "object",
+  "required": ["schema", "url", "title", "interactive"],
+  "properties": {
+    "schema": { "const": "chirpy.link-card/1.0.0" },
+    "url": { "type": "string", "minLength": 8 },
+    "title": { "type": "string", "minLength": 1, "maxLength": 300 },
+    "description": { "type": "string" },
+    "image": { "type": "string" },
+    "siteName": { "type": "string" },
+    "publisher": { "type": "string" },
+    "type": { "type": "string", "enum": ["website", "article", "video"] },
+    "interactive": {
+      "type": "object",
+      "required": ["provider", "playable"],
+      "properties": {
+        "provider": { "type": "string" },
+        "embedUrl": { "type": "string" },
+        "playable": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
 }
 ```
 

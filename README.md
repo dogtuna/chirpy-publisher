@@ -81,9 +81,12 @@ It walks through:
 - `GET /api/network-node`
 - `GET /api/network-node/check-name?name=...`
 - `POST /api/network-node`
+- `POST /api/network-node/profile` (announce active DID/IPNS for discovery)
 - `GET /api/users` (presence users ordered by last activity)
 - `GET /api/protocol/schemas`
 - `POST /api/protocol/validate` with `{ schemaId, payload }`
+- `GET /api/link-preview?url=...`
+- `POST /stage` (multipart, media pipeline with image/video processing)
 - `GET /api/stages`
 - `GET /api/stages/:stageId`
 - `GET /api/chirpspace?...`
