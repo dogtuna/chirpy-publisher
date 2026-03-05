@@ -1662,9 +1662,11 @@ async function inferAudienceTagsWithOllama(text, bucketTags, allowedAudiences) {
     const data = await response.json();
     const raw = String(data?.response || '').trim();
     const parsed = parseLooseJsonObject(raw);
-    const audiences = normalizeTagList(Array.isArray(parsed?.audiences) ? parsed.audiences : []);
-    const allowed = new Set(allowedAudiences);
-    return audiences.filter((x) => allowed.has(x));
+    const allowed = normalizeTagList(allowedAudiences || []);
+    const fromJson = extractAllowedTagsFromModelPayload(parsed, allowed, ['audiences', 'audience', 'target_audience']);
+    if (fromJson.length) return fromJson.slice(0, 4);
+    const fromText = extractAllowedTagsFromText(raw, allowed);
+    return fromText.slice(0, 4);
   } catch (_error) {
     return [];
   }
@@ -2119,13 +2121,53 @@ async function inferBucketsWithOllama(text, allowedBuckets) {
     });
     if (!response.ok) return [];
     const data = await response.json();
-    const raw = String(data?.response || '');
-    const normalized = normalizeTagList(raw.split(',').map((x) => x.trim()));
-    const allowed = new Set(allowedBuckets);
-    return normalized.filter((x) => allowed.has(x)).slice(0, 3);
+    const raw = String(data?.response || '').trim();
+    const parsed = parseLooseJsonObject(raw);
+    const allowed = normalizeTagList(allowedBuckets || []);
+    const fromJson = extractAllowedTagsFromModelPayload(parsed, allowed, ['buckets', 'bucket', 'topic', 'main_topic']);
+    if (fromJson.length) return fromJson.slice(0, 3);
+    const fromText = extractAllowedTagsFromText(raw, allowed);
+    return fromText.slice(0, 3);
   } catch (_error) {
     return [];
   }
+}
+
+function extractAllowedTagsFromModelPayload(payload, allowedList, preferredKeys) {
+  if (!payload || typeof payload !== 'object') return [];
+  const allowed = normalizeTagList(allowedList || []);
+  if (!allowed.length) return [];
+  const values = [];
+  for (const key of preferredKeys || []) {
+    const val = payload?.[key];
+    if (Array.isArray(val)) values.push(...val);
+    else if (typeof val === 'string') values.push(val);
+  }
+  if (!values.length) {
+    for (const val of Object.values(payload)) {
+      if (Array.isArray(val)) values.push(...val);
+      else if (typeof val === 'string') values.push(val);
+    }
+  }
+  const out = [];
+  for (const raw of values) {
+    const coerced = coerceAllowedTag(raw, allowed);
+    if (coerced && !out.includes(coerced)) out.push(coerced);
+  }
+  return out;
+}
+
+function extractAllowedTagsFromText(raw, allowedList) {
+  const text = String(raw || '').toLowerCase();
+  const allowed = normalizeTagList(allowedList || []);
+  if (!text || !allowed.length) return [];
+  const out = [];
+  for (const candidate of allowed) {
+    const needle = candidate.replace(/[-\s]+/g, '[-\\s]?');
+    const re = new RegExp(`\\b${needle}\\b`, 'i');
+    if (re.test(text) && !out.includes(candidate)) out.push(candidate);
+  }
+  return out;
 }
 
 function dropSubsumedTags(tags) {
