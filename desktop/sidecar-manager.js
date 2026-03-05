@@ -132,7 +132,7 @@ class SidecarManager {
         await this.launchOllamaAndWait(ollamaBin, ['serve'], env);
       } catch (error) {
         if (!/serve command not supported/i.test(String(error?.message || ''))) throw error;
-        await this.launchOllamaAndWait(ollamaBin, [], env);
+        await this.launchOllamaLauncherAndWait(ollamaBin, env);
       }
       this.state.ollama = { ...this.state.ollama, available: true, running: true, source: 'bundled', error: '' };
       await this.ensureOllamaModels(ollamaBin);
@@ -163,24 +163,13 @@ class SidecarManager {
           await this.launchOllamaAndWait(candidate, ['serve'], env);
         } catch (error) {
           if (!/serve command not supported/i.test(String(error?.message || ''))) throw error;
-          await this.launchOllamaAndWait(candidate, [], env);
+          await this.launchOllamaLauncherAndWait(candidate, env);
         }
         this.state.ollama.binaryPath = candidate === 'ollama' ? (this.state.ollama.binaryPath || 'ollama') : candidate;
         return true;
       } catch (_error) {
         await this.stopChild(this.ollamaProcess);
         this.ollamaProcess = null;
-      }
-    }
-    // macOS app fallback: launch GUI app and wait for local API
-    if (process.platform === 'darwin') {
-      try {
-        await this.execFileSafe('open', ['-g', '-j', '-a', 'Ollama'], 8000);
-        await this.waitFor(async () => this.ollamaResponding(), 60000, 500);
-        this.state.ollama.binaryPath = this.state.ollama.binaryPath || '/Applications/Ollama.app';
-        return true;
-      } catch (_error) {
-        // no-op
       }
     }
     return false;
@@ -214,6 +203,23 @@ class SidecarManager {
       }
       return this.ollamaResponding();
     }, 60000, 500);
+  }
+
+  async launchOllamaLauncherAndWait(candidate, env) {
+    // Some Ollama distributions launch the daemon without a "serve" subcommand.
+    // In that mode the process may detach/exit quickly, so we only require API readiness.
+    try {
+      const child = spawn(candidate, [], {
+        stdio: ['ignore', 'ignore', 'ignore'],
+        env: env || { ...process.env, OLLAMA_HOST: '127.0.0.1:11434' },
+        detached: false
+      });
+      child.on('error', () => null);
+      child.unref?.();
+    } catch (_error) {
+      // ignore; readiness check below is authoritative
+    }
+    await this.waitFor(async () => this.ollamaResponding(), 60000, 500);
   }
 
   async ensureOllamaModels(ollamaBin) {

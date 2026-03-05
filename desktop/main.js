@@ -16,16 +16,20 @@ let sidecars = null;
 const desktopProfilePath = () => path.join(app.getPath('userData'), 'chirpy-desktop-profile.json');
 
 app.whenReady().then(async () => {
+  createWindow();
   sidecars = new SidecarManager({
     userDataPath: app.getPath('userData'),
     resourcesPath: process.resourcesPath,
     isPackaged: app.isPackaged
   });
 
-  await sidecars.ensureStarted();
+  const sidecarStartPromise = sidecars.ensureStarted().catch(() => null);
+  await Promise.race([sidecarStartPromise, new Promise((resolve) => setTimeout(resolve, 6000))]);
   await ensureServerRunning();
   installIpcHandlers();
-  createWindow();
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    await mainWindow.loadURL(`${SERVER_URL}/chirpspace.html`).catch(() => null);
+  }
 });
 
 app.on('window-all-closed', () => {
@@ -67,7 +71,15 @@ function createWindow() {
       // no-op
     }
   });
-  mainWindow.loadURL(`${SERVER_URL}/chirpspace.html`);
+  const splashHtml = `
+    <html><body style="margin:0;background:#f7f5f0;color:#1f2937;font:15px -apple-system,BlinkMacSystemFont,Segoe UI,Inter,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh">
+      <div style="text-align:center">
+        <div style="font-size:22px;font-weight:700;margin-bottom:8px">Chirpy</div>
+        <div>Starting local engines and loading your workspace...</div>
+      </div>
+    </body></html>
+  `;
+  mainWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(splashHtml)}`);
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
   });
