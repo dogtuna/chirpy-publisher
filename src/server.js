@@ -1293,9 +1293,12 @@ async function buildSemanticTags({ autoTagEnabled, existingTags, text, blocks, l
 
   const corpus = buildTagCorpus(text, blocks, links);
   const semantic = await classifyPostSemanticRoute(corpus);
+  const inferredNiches = await inferNicheDepthTags(corpus, semantic.bucket, semantic.audience);
   const bucketTag = normalizeTagList([semantic.bucket]).filter((x) => MODEL_BUCKETS.includes(x));
   const audienceTag = normalizeTagList([semantic.audience]).filter((x) => MODEL_AUDIENCES.includes(x));
-  const subtopics = normalizeTagList(semantic.subtopics || []).filter((x) => !isWeakAudienceTag(x)).slice(0, 3);
+  const subtopics = normalizeTagList([...(semantic.subtopics || []), ...inferredNiches])
+    .filter((x) => !isWeakAudienceTag(x))
+    .slice(0, 4);
   const entities = normalizeTagList(semantic.entities || []).filter((x) => !isWeakTag(x)).slice(0, 2);
 
   const merged = normalizeTagList([
@@ -1325,6 +1328,7 @@ async function classifyPostSemanticRoute(corpus) {
     `bucket: exactly one value from this list: ${MODEL_BUCKETS.join(', ')}`,
     `audience: exactly one value from this list: ${MODEL_AUDIENCES.join(', ')}`,
     'subtopics: array of 0-3 concise inferred niche labels (1-3 words each), based on meaning not phrase extraction.',
+    'When applicable, include layered depth from broad to specific (example: baseball, texas rangers).',
     'entities: array of 0-2 proper names/titles/teams/products only when clearly present.',
     'Rules:',
     '- infer intent/context (professional, hobby, literal vs metaphorical).',
@@ -1389,6 +1393,60 @@ async function classifyPostSemanticRoute(corpus) {
     const fallbackAudiences = await inferAudienceTagsWithOllama(text, [fallbackBucket], MODEL_AUDIENCES);
     const fallbackAudience = coerceAllowedTag(fallbackAudiences[0], MODEL_AUDIENCES) || 'general';
     return { bucket: fallbackBucket, audience: fallbackAudience, subtopics: [], entities: [] };
+  }
+}
+
+async function inferNicheDepthTags(corpus, bucket, audience) {
+  const text = String(corpus || '').trim();
+  if (!text || text.length < 6) return [];
+
+  const host = String(process.env.OLLAMA_HOST || 'http://127.0.0.1:11434').trim();
+  const model = String(process.env.OLLAMA_MODEL || 'llama3.2:3b').trim();
+  const prompt = [
+    'You generate discovery-oriented niche tags for a social post.',
+    'Return strict JSON only: {"niches":["..."]}',
+    'niches rules:',
+    '- 0-4 short tags, each 1-3 words.',
+    '- infer depth from broad subdomain to specific niche when available.',
+    '- avoid sentence fragments and mood phrases.',
+    '- tags must help route to interested audiences, not just restate text.',
+    '- if sports context exists, include sport type and team/league/franchise where relevant.',
+    '- if entertainment context exists, include medium + title/franchise when relevant.',
+    '- if technology context exists, include domain + platform/protocol/tool when relevant.',
+    `Selected top-level bucket: ${String(bucket || 'general')}`,
+    `Selected audience: ${String(audience || 'general')}`,
+    'Post:',
+    text.slice(0, 2600)
+  ].join('\n');
+
+  try {
+    const response = await fetch(`${host}/api/generate`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model,
+        prompt,
+        stream: false,
+        format: 'json',
+        options: { temperature: 0.15 }
+      })
+    });
+    if (!response.ok) return [];
+    const data = await response.json();
+    const parsed = parseLooseJsonObject(String(data?.response || '').trim());
+    const raw = Array.isArray(parsed?.niches)
+      ? parsed.niches
+      : String(parsed?.niches || '')
+          .split(',')
+          .map((x) => x.trim())
+          .filter(Boolean);
+    const topLevel = new Set(normalizeTagList([bucket, audience]));
+    return normalizeTagList(raw)
+      .filter((x) => !topLevel.has(x))
+      .filter((x) => !isWeakTag(x) && !isWeakAudienceTag(x))
+      .slice(0, 4);
+  } catch (_error) {
+    return [];
   }
 }
 
