@@ -1244,7 +1244,8 @@ async function buildSemanticTags({ autoTagEnabled, existingTags, text, blocks, l
   const ollamaTags = await generateTagsWithOllama(corpus, manual);
   const fallbackTags = extractKeywordTags(corpus, [...manual, ...namedPhrases, ...bucketTags]);
   const merged = normalizeTagList([...manual, ...namedPhrases, ...bucketTags, ...ollamaTags, ...fallbackTags]).slice(0, 12);
-  return dropSubsumedTags(merged).slice(0, 10);
+  const compact = dropSubsumedTags(merged);
+  return filterNamedPhraseFragments(compact, namedPhrases).slice(0, 10);
 }
 
 function buildTagCorpus(text, blocks, links) {
@@ -1318,7 +1319,8 @@ function extractKeywordTags(corpus, existingTags) {
     'post', 'season', 'question', 'take', 'takes', 'see', 'soon'
   ]);
   const weakBigramParts = new Set([
-    'take', 'takes', 'see', 'watch', 'wanna', 'want', 'going', 'go', 'make', 'made', 'have', 'has', 'had', 'soon'
+    'take', 'takes', 'see', 'watch', 'wanna', 'want', 'going', 'go', 'make', 'made', 'have', 'has', 'had', 'soon',
+    'new', 'upcoming', 'any', 'anyone'
   ]);
   const boosted = new Set([
     'baseball', 'mlb', 'nfl', 'nba', 'nhl', 'soccer', 'football', 'basketball', 'hockey', 'playoffs', 'opening day',
@@ -1531,6 +1533,37 @@ function dropSubsumedTags(tags) {
   return originalOrder;
 }
 
+function filterNamedPhraseFragments(tags, namedPhrases) {
+  const list = Array.isArray(tags) ? tags : [];
+  const titles = normalizeTagList(namedPhrases || []);
+  if (!titles.length) return list;
+
+  const titleTokens = titles.map((t) => t.split(/\s+/).filter(Boolean));
+  const mediumWords = new Set(['movie', 'movies', 'film', 'show', 'series', 'episode', 'season', 'new', 'upcoming']);
+
+  return list.filter((tag) => {
+    const clean = String(tag || '').trim().toLowerCase();
+    if (!clean) return false;
+    if (titles.includes(clean)) return true;
+
+    const words = clean.split(/\s+/).filter(Boolean);
+    return !titleTokens.some((tokens) => {
+      const overlap = words.filter((w) => tokens.includes(w));
+      if (!overlap.length) return false;
+
+      // Remove partial title fragments when full title exists.
+      const isStrictSubset = words.every((w) => tokens.includes(w)) && words.length < tokens.length;
+      if (isStrictSubset) return true;
+
+      // Remove mixed fragments like "blinders movie" when a named title is present.
+      const hasMediumWord = words.some((w) => mediumWords.has(w));
+      if (hasMediumWord && overlap.length >= 1 && words.length <= 3) return true;
+
+      return false;
+    });
+  });
+}
+
 function isUsableTagToken(token, stop, weak) {
   if (!token) return false;
   if (token.length < 3 || token.length > 28) return false;
@@ -1544,7 +1577,7 @@ function isWeakTag(tag) {
   const weakTerms = new Set([
     'almost', 'here', 'there', 'fired', 'fired up', 'up', 'down', 'good', 'great', 'nice', 'cool', 'awesome',
     'amazing', 'excited', 'today', 'tomorrow', 'yesterday', 'soon', 'really', 'very', 'much', 'more', 'less',
-    'thing', 'stuff', 'post', 'any fans', 'fire any'
+    'thing', 'stuff', 'post', 'any fans', 'fire any', 'anyone', 'upcoming'
   ]);
   const cleaned = String(tag || '').trim().toLowerCase();
   if (!cleaned) return true;
