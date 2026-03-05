@@ -2,11 +2,14 @@
   "name": "chirpy-publisher",
   "version": "0.1.0",
   "description": "ChirpyLink Rich-Media Publisher Content Stage service",
-  "main": "src/server.js",
+  "main": "desktop/main.js",
   "type": "commonjs",
   "scripts": {
     "start": "node src/server.js",
-    "check": "node --check src/server.js"
+    "desktop": "electron .",
+    "desktop:dev": "CHIRPY_DESKTOP_DEV=1 electron .",
+    "build:desktop": "electron-builder --mac --win --linux",
+    "check": "node --check src/server.js && node --check desktop/main.js && node --check desktop/preload.js && node --check desktop/sidecar-manager.js"
   },
   "engines": {
     "node": ">=20.0.0"
@@ -24,5 +27,45 @@
     "metascraper-url": "^5.47.7",
     "multer": "^1.4.5-lts.2",
     "sharp": "^0.33.5"
+  },
+  "devDependencies": {
+    "electron": "^35.0.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.chirpy.publisher",
+    "productName": "Chirpy",
+    "asar": false,
+    "files": [
+      "desktop/**/*",
+      "src/**/*",
+      "public/**/*",
+      "public-v1/**/*",
+      "public-v2/**/*",
+      "public-v3/**/*",
+      "public-v4/**/*",
+      "public-v5/**/*",
+      "docs/**/*",
+      "versions.html",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/bin",
+        "to": "bin",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "mac": {
+      "target": "dmg"
+    },
+    "win": {
+      "target": "nsis"
+    },
+    "linux": {
+      "target": "AppImage"
+    }
   }
 }

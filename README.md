@@ -9,6 +9,7 @@ It lets you:
 - run identity profiles with local keys
 - maintain family/private visibility via encryption
 - discover other nodes through lightweight PubSub presence
+- run as a desktop app with bundled sidecars (IPFS + Ollama)
 
 No central backend is required for private keys.
 
@@ -35,7 +36,7 @@ Protocol docs: [docs/network-protocol.md](docs/network-protocol.md)
 
 - Node.js 20+
 - `ffmpeg` in `PATH`
-- `ipfs` CLI in `PATH` (recommended for full publish + cross-node presence)
+- For desktop builds: platform binaries in `resources/bin` (IPFS + Ollama)
 
 ## Install
 
@@ -55,9 +56,44 @@ Default URL: `http://localhost:3020`
 - My ChirpSpace: `http://localhost:3020/chirpspace.html`
 - UI versions page: `http://localhost:3020/versions`
 
+## Desktop (Electron)
+
+Run desktop shell in development:
+
+```bash
+npm run desktop
+```
+
+Build installers:
+
+```bash
+npm run build:desktop
+```
+
+### Sidecar Binaries
+
+Add binaries before packaging:
+
+- `resources/bin/darwin-arm64/ipfs`
+- `resources/bin/darwin-arm64/ollama`
+- `resources/bin/darwin-x64/ipfs`
+- `resources/bin/darwin-x64/ollama`
+- `resources/bin/linux-x64/ipfs`
+- `resources/bin/linux-x64/ollama`
+- `resources/bin/win32-x64/ipfs.exe`
+- `resources/bin/win32-x64/ollama.exe`
+
+On app start, Chirpy will:
+
+1. start bundled IPFS if no daemon is active
+2. initialize `IPFS_PATH` on first run and enable pubsub
+3. start bundled Ollama if not already active
+4. pull `nomic-embed-text` model in background
+5. launch ChirpSpace dashboard
+
 ## First-Time Setup
 
-Open the identity panel and run **Run First-Time Setup**.
+On first run, Chirpy automatically opens the Identity panel and requires setup before staging posts.
 
 It walks through:
 
@@ -126,4 +162,5 @@ curl -X POST http://localhost:3020/api/protocol/validate \
 ## Notes
 
 - If `ipfs` is unavailable, the app still works locally, but cross-node presence/publish features are limited.
+- In desktop mode, if sidecar binaries are missing, the UI still opens but runtime status shows missing engines.
 - Do not force-add ignored paths when committing (`ipfs-data`, `staged`, `runtime`).

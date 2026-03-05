@@ -4,22 +4,35 @@ const els = {
   chirpspaceFeed: document.getElementById("chirpspaceFeed"),
   viewerProfile: document.getElementById("viewerProfile"),
   authorProfile: document.getElementById("authorProfile"),
-  postTemplate: document.getElementById("postTemplate")
+  postTemplate: document.getElementById("postTemplate"),
+  desktopRuntime: document.getElementById("desktopRuntime"),
+  onboardingCard: document.getElementById("onboardingCard"),
+  nicknameInput: document.getElementById("nicknameInput"),
+  interestsInput: document.getElementById("interestsInput"),
+  saveOnboarding: document.getElementById("saveOnboarding"),
+  onboardingStatus: document.getElementById("onboardingStatus"),
+  refreshRadar: document.getElementById("refreshRadar"),
+  radarList: document.getElementById("radarList")
 };
 
 const state = {
   profiles: [],
   viewerProfileId: "",
-  authorProfileId: ""
+  authorProfileId: "",
+  posts: [],
+  desktopProfile: null,
+  desktopStatus: null
 };
 
 boot();
 
-function boot() {
+async function boot() {
   loadProfiles();
   bindControls();
   renderProfileSelectors();
-  loadChirpSpace();
+  await hydrateDesktopContext();
+  await loadChirpSpace();
+  await loadRadar();
 }
 
 function loadProfiles() {
@@ -36,16 +49,27 @@ function loadProfiles() {
 }
 
 function bindControls() {
-  els.refreshChirpSpace.addEventListener("click", loadChirpSpace);
-  els.viewerProfile.addEventListener("change", () => {
+  els.refreshChirpSpace.addEventListener("click", async () => {
+    await loadChirpSpace();
+    await loadRadar();
+  });
+  els.viewerProfile.addEventListener("change", async () => {
     state.viewerProfileId = els.viewerProfile.value;
     updateIdentityText();
-    loadChirpSpace();
+    await loadChirpSpace();
+    await loadRadar();
   });
-  els.authorProfile.addEventListener("change", () => {
+  els.authorProfile.addEventListener("change", async () => {
     state.authorProfileId = els.authorProfile.value;
-    loadChirpSpace();
+    await loadChirpSpace();
+    await loadRadar();
   });
+  if (els.saveOnboarding) {
+    els.saveOnboarding.addEventListener("click", saveDesktopOnboarding);
+  }
+  if (els.refreshRadar) {
+    els.refreshRadar.addEventListener("click", loadRadar);
+  }
 }
 
 function renderProfileSelectors() {
@@ -85,6 +109,91 @@ function updateIdentityText() {
   els.chirpspaceIdentity.textContent = `Viewing as ${viewer.name} (${viewer.role || "adult"}) | Feed: ${author?.name || "unknown"}`;
 }
 
+async function hydrateDesktopContext() {
+  if (!window.chirpyDesktop) {
+    if (els.desktopRuntime) els.desktopRuntime.textContent = "Browser mode: desktop sidecars unavailable.";
+    hideOnboardingCard();
+    return;
+  }
+
+  try {
+    const [statusResp, profileResp] = await Promise.all([
+      window.chirpyDesktop.getStatus(),
+      window.chirpyDesktop.getProfile()
+    ]);
+    state.desktopStatus = statusResp?.ok ? statusResp : null;
+    state.desktopProfile = profileResp?.ok ? profileResp.profile : null;
+    renderDesktopRuntime();
+    if (state.desktopProfile?.nickname && Array.isArray(state.desktopProfile?.interests)) {
+      hideOnboardingCard();
+      prefillDesktopProfile();
+    } else {
+      showOnboardingCard();
+    }
+  } catch (_error) {
+    if (els.desktopRuntime) els.desktopRuntime.textContent = "Desktop runtime status unavailable.";
+    showOnboardingCard();
+  }
+}
+
+function renderDesktopRuntime() {
+  if (!els.desktopRuntime) return;
+  if (!state.desktopStatus) {
+    els.desktopRuntime.textContent = "Desktop runtime status unavailable.";
+    return;
+  }
+  const ipfs = state.desktopStatus.sidecars?.ipfs;
+  const ollama = state.desktopStatus.sidecars?.ollama;
+  const ipfsLabel = ipfs?.running ? `IPFS:${ipfs.source}` : "IPFS:offline";
+  const ollamaLabel = ollama?.running ? `Ollama:${ollama.source}` : "Ollama:offline";
+  const modelLabel = ollama?.modelReady ? "model:ready" : "model:loading";
+  els.desktopRuntime.textContent = `${ipfsLabel} | ${ollamaLabel} | ${modelLabel}`;
+}
+
+function prefillDesktopProfile() {
+  if (!state.desktopProfile) return;
+  if (els.nicknameInput) els.nicknameInput.value = state.desktopProfile.nickname || "";
+  if (els.interestsInput) els.interestsInput.value = (state.desktopProfile.interests || []).join(", ");
+}
+
+function showOnboardingCard() {
+  if (!els.onboardingCard) return;
+  els.onboardingCard.classList.remove("hidden");
+}
+
+function hideOnboardingCard() {
+  if (!els.onboardingCard) return;
+  els.onboardingCard.classList.add("hidden");
+}
+
+async function saveDesktopOnboarding() {
+  if (!window.chirpyDesktop) {
+    els.onboardingStatus.textContent = "Desktop profile is available only in Electron mode.";
+    return;
+  }
+  const nickname = String(els.nicknameInput?.value || "").trim();
+  const interests = String(els.interestsInput?.value || "")
+    .split(",")
+    .map((x) => x.trim())
+    .filter(Boolean);
+
+  if (interests.length !== 3) {
+    els.onboardingStatus.textContent = "Choose exactly 3 interests.";
+    return;
+  }
+
+  els.onboardingStatus.textContent = "Saving...";
+  const result = await window.chirpyDesktop.saveProfile({ nickname, interests });
+  if (!result?.ok) {
+    els.onboardingStatus.textContent = result?.error || "Could not save profile.";
+    return;
+  }
+  state.desktopProfile = result.profile;
+  hideOnboardingCard();
+  els.onboardingStatus.textContent = "";
+  await loadRadar();
+}
+
 async function loadChirpSpace() {
   const viewer = activeViewer();
   const author = activeAuthor();
@@ -96,10 +205,123 @@ async function loadChirpSpace() {
     const resp = await fetch(`/api/chirpspace?${params.toString()}`);
     const data = await resp.json();
     if (!resp.ok || !data.ok) throw new Error(data.error || "ChirpSpace load failed");
-    await renderPosts(data.posts || []);
+    state.posts = Array.isArray(data.posts) ? data.posts : [];
+    await renderPosts(state.posts);
   } catch (error) {
+    state.posts = [];
     els.chirpspaceFeed.innerHTML = `<div class="empty-state">Failed to load ChirpSpace: ${escapeHtml(error.message)}</div>`;
   }
+}
+
+async function loadRadar() {
+  if (!els.radarList) return;
+  try {
+    const [usersResp, postsResp] = await Promise.all([
+      fetch("/api/users"),
+      fetch("/api/chirpspace?limit=200")
+    ]);
+    const usersData = await usersResp.json();
+    const postsData = await postsResp.json();
+    if (!usersResp.ok || !usersData.ok) throw new Error(usersData.error || "users load failed");
+    if (!postsResp.ok || !postsData.ok) throw new Error(postsData.error || "posts load failed");
+    const users = Array.isArray(usersData.users) ? usersData.users : [];
+    const tagsByDid = aggregateTagsByDid(Array.isArray(postsData.posts) ? postsData.posts : []);
+    const candidates = users.map((user) => {
+      const tags = tagsByDid.get(user.profileDid) || [];
+      return {
+        id: user.id,
+        name: user.name || "unnamed",
+        did: user.profileDid || "",
+        tags,
+        active: Boolean(user.active),
+        lastActivity: user.lastActivity || ""
+      };
+    });
+    const matchById = await computeMatches(candidates);
+    renderRadar(candidates, matchById);
+  } catch (error) {
+    els.radarList.innerHTML = `<div class="empty-state">Failed to load radar: ${escapeHtml(error.message)}</div>`;
+  }
+}
+
+function aggregateTagsByDid(posts) {
+  const map = new Map();
+  for (const post of posts || []) {
+    const did = String(post?.userDid || "").trim();
+    if (!did) continue;
+    const tags = Array.isArray(post?.tags) ? post.tags : [];
+    const existing = map.get(did) || new Set();
+    for (const tag of tags) {
+      const clean = String(tag || "").trim().toLowerCase();
+      if (clean) existing.add(clean);
+    }
+    map.set(did, existing);
+  }
+  const out = new Map();
+  for (const [did, set] of map.entries()) {
+    out.set(did, Array.from(set).slice(0, 8));
+  }
+  return out;
+}
+
+async function computeMatches(candidates) {
+  const map = new Map();
+  const interests = Array.isArray(state.desktopProfile?.interests) ? state.desktopProfile.interests : [];
+  if (!interests.length) return map;
+
+  if (window.chirpyDesktop?.semanticMatch) {
+    try {
+      const result = await window.chirpyDesktop.semanticMatch({
+        interests,
+        candidates: candidates.map((x) => ({ id: x.id, name: x.name, tags: x.tags }))
+      });
+      const matches = Array.isArray(result?.matches) ? result.matches : [];
+      matches.forEach((item) => {
+        map.set(String(item.id), { score: Number(item.score) || 0, reason: item.reason || "semantic" });
+      });
+      return map;
+    } catch (_error) {
+      // fallback below
+    }
+  }
+
+  candidates.forEach((candidate) => {
+    const tags = candidate.tags || [];
+    const overlap = tags.filter((x) => interests.includes(x)).length;
+    if (overlap > 0) {
+      map.set(candidate.id, { score: overlap / interests.length, reason: "keyword" });
+    }
+  });
+  return map;
+}
+
+function renderRadar(candidates, matchById) {
+  els.radarList.innerHTML = "";
+  if (!candidates.length) {
+    els.radarList.innerHTML = '<div class="empty-state">No active users discovered yet.</div>';
+    return;
+  }
+
+  candidates
+    .sort((a, b) => String(b.lastActivity || "").localeCompare(String(a.lastActivity || "")))
+    .forEach((candidate) => {
+      const item = document.createElement("article");
+      const match = matchById.get(candidate.id);
+      item.className = `radar-item${match ? " match" : ""}`;
+      const status = candidate.active ? "active" : "idle";
+      const tagsHtml = (candidate.tags || [])
+        .slice(0, 6)
+        .map((tag) => `<span class="pill-mini">${escapeHtml(tag)}</span>`)
+        .join("");
+      const score = match ? ` | match ${Math.round((match.score || 0) * 100)}% (${match.reason})` : "";
+      item.innerHTML = `
+        <strong>${escapeHtml(candidate.name)}</strong>
+        <div class="sub small">${status}${score}</div>
+        <div class="sub small">${escapeHtml(candidate.did || "no DID announced")}</div>
+        <div>${tagsHtml || '<span class="sub small">no public tags yet</span>'}</div>
+      `;
+      els.radarList.appendChild(item);
+    });
 }
 
 async function renderPosts(posts) {
@@ -269,7 +491,8 @@ async function makePublic(stageId, viewer) {
     });
     const data = await resp.json();
     if (!resp.ok || !data.ok) throw new Error(data.error || "promotion failed");
-    loadChirpSpace();
+    await loadChirpSpace();
+    await loadRadar();
   } catch (error) {
     alert(`Could not make post public: ${error.message}`);
   }
@@ -289,8 +512,5 @@ function toDate(value) {
 }
 
 function escapeHtml(value) {
-  return String(value)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;");
+  return String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 }

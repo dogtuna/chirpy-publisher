@@ -15,6 +15,7 @@ const uploadRoot = path.join(runtimeRoot, 'uploads');
 
 const app = express();
 const PORT = Number.parseInt(process.env.PORT || '3020', 10);
+const BIND_HOST = String(process.env.CHIRPY_BIND_HOST || '0.0.0.0').trim() || '0.0.0.0';
 
 const presenceTopic = process.env.CHIRPY_PRESENCE_TOPIC || 'chirpy.users.v1';
 const publishTopic = process.env.CHIRPY_PUBSUB_TOPIC || 'chirpy.new-post';
@@ -651,16 +652,16 @@ app.post('/api/protocol/validate', (req, res) => {
   res.status(result.valid ? 200 : 400).json({ ok: result.valid, schemaId, valid: result.valid, errors: result.errors });
 });
 
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Chirpy Publisher server running at http://0.0.0.0:${PORT}`);
-  console.log(`Publisher: http://0.0.0.0:${PORT}/`);
-  console.log(`My ChirpSpace: http://0.0.0.0:${PORT}/chirpspace.html`);
-  console.log(`Version Picker: http://0.0.0.0:${PORT}/versions`);
-  console.log(`V1 (Focused Writer): http://0.0.0.0:${PORT}/v1`);
-  console.log(`V2 (Split Studio): http://0.0.0.0:${PORT}/v2`);
-  console.log(`V3 (Stacked Sections): http://0.0.0.0:${PORT}/v3`);
-  console.log(`V4 (Dashboard Cards): http://0.0.0.0:${PORT}/v4`);
-  console.log(`V5 (Sidebar Editor): http://0.0.0.0:${PORT}/v5`);
+app.listen(PORT, BIND_HOST, () => {
+  console.log(`Chirpy Publisher server running at http://${BIND_HOST}:${PORT}`);
+  console.log(`Publisher: http://${BIND_HOST}:${PORT}/`);
+  console.log(`My ChirpSpace: http://${BIND_HOST}:${PORT}/chirpspace.html`);
+  console.log(`Version Picker: http://${BIND_HOST}:${PORT}/versions`);
+  console.log(`V1 (Focused Writer): http://${BIND_HOST}:${PORT}/v1`);
+  console.log(`V2 (Split Studio): http://${BIND_HOST}:${PORT}/v2`);
+  console.log(`V3 (Stacked Sections): http://${BIND_HOST}:${PORT}/v3`);
+  console.log(`V4 (Dashboard Cards): http://${BIND_HOST}:${PORT}/v4`);
+  console.log(`V5 (Sidebar Editor): http://${BIND_HOST}:${PORT}/v5`);
 });
 
 async function bootstrap() {

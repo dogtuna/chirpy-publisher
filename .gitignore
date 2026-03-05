@@ -5,3 +5,5 @@ ipfs-data
 runtime
 .DS_Store
 ._*
+dist
+release

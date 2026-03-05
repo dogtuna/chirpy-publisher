@@ -16,6 +16,7 @@
         <p class="eyebrow">Sovereign Social</p>
         <h1>My ChirpSpace</h1>
         <p id="chirpspaceIdentity" class="sub">Loading identity...</p>
+        <p id="desktopRuntime" class="sub small"></p>
       </div>
       <div class="row actions">
         <label class="field">
@@ -32,6 +33,31 @@
     </header>
 
     <main class="chirpspace-shell">
+      <section id="onboardingCard" class="onboarding-card hidden">
+        <h2>Welcome to Chirpy</h2>
+        <p class="sub">Set your network nickname and exactly 3 interests for Garden Radar matching.</p>
+        <label class="field">
+          <span>Nickname</span>
+          <input id="nicknameInput" type="text" placeholder="e.g. Jonny Garden" />
+        </label>
+        <label class="field">
+          <span>Interests (comma separated, 3 total)</span>
+          <input id="interestsInput" type="text" placeholder="3D printing, gardening, music" />
+        </label>
+        <div class="row actions">
+          <button id="saveOnboarding" class="btn primary" type="button">Save & Start</button>
+          <span id="onboardingStatus" class="sub small"></span>
+        </div>
+      </section>
+
+      <section class="radar-shell">
+        <div class="row between">
+          <h2>Garden Radar</h2>
+          <button id="refreshRadar" class="btn ghost small" type="button">Refresh Radar</button>
+        </div>
+        <div id="radarList" class="radar-list"></div>
+      </section>
+
       <section id="chirpspaceFeed" class="chirpspace-feed"></section>
     </main>
 

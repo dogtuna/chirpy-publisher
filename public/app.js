@@ -67,6 +67,7 @@ const state = {
   blocks: [],
   files: [],
   saveTimer: null,
+  isSubmitting: false,
   ipnsKeys: [],
   profiles: [],
   activeProfileId: null,
@@ -100,6 +101,7 @@ function boot() {
   autoUpgradeProfilesSilently();
   loadHistory();
   loadUsers();
+  scheduleSetupPrompt();
   setInterval(loadUsers, 30000);
 }
 
@@ -339,18 +341,14 @@ async function saveNodeName() {
 }
 
 function scheduleSetupPrompt() {
-  try {
-    if (localStorage.getItem("chirpySetupPrompted") === "1") return;
-    localStorage.setItem("chirpySetupPrompted", "1");
-  } catch (_error) {
-    // ignore
-  }
-  if (isSetupComplete()) return;
+  const complete = isSetupComplete();
+  syncSetupGate(complete);
+  if (complete) return;
   if (els.identityMenu?.classList.contains("hidden")) {
     els.identityMenu.classList.remove("hidden");
   }
   if (els.nodeNameStatus) {
-    els.nodeNameStatus.textContent = "Run First-Time Setup to finish node + identity initialization.";
+    els.nodeNameStatus.textContent = "First run detected. Complete setup to join Chirpy discovery.";
   }
 }
 
@@ -364,6 +362,9 @@ async function runFirstTimeSetup() {
     if (els.nodeNameStatus) {
       els.nodeNameStatus.textContent = "Setup complete.";
     }
+    await announceNodeProfile();
+    await loadUsers();
+    scheduleSetupPrompt();
     alert("Setup complete: node name, profile, DID, IPNS key, and encryption keys are ready.");
   } catch (error) {
     alert(`Setup halted: ${error.message}`);
@@ -1112,6 +1113,23 @@ function makePreviewFrame(block) {
 }
 
 async function submitPost() {
+  if (!isSetupComplete()) {
+    scheduleSetupPrompt();
+    setStatus("error", "Setup Required");
+    els.resultJson.textContent = JSON.stringify(
+      {
+        ok: false,
+        error:
+          "First-time setup is required before staging posts. Open Identity and run First-Time Setup."
+      },
+      null,
+      2
+    );
+    return;
+  }
+
+  state.isSubmitting = true;
+  syncSetupGate(true);
   setStatus("working", "Staging");
   els.submitBtn.disabled = true;
 
@@ -1209,7 +1227,8 @@ async function submitPost() {
     setStatus("error", "Error");
     els.resultJson.textContent = JSON.stringify({ ok: false, error: error.message || String(error) }, null, 2);
   } finally {
-    els.submitBtn.disabled = false;
+    state.isSubmitting = false;
+    syncSetupGate();
   }
 }
 
@@ -1535,6 +1554,19 @@ function formatActivity(value) {
   const date = new Date(value || "");
   if (Number.isNaN(date.getTime())) return "unknown";
   return date.toLocaleString();
+}
+
+function syncSetupGate(knownComplete) {
+  const complete = typeof knownComplete === "boolean" ? knownComplete : isSetupComplete();
+  if (els.runSetup) {
+    els.runSetup.textContent = complete ? "Setup Complete" : "Run First-Time Setup";
+  }
+  if (els.submitBtn) {
+    const blocked = !complete;
+    const disabled = state.isSubmitting || blocked;
+    els.submitBtn.disabled = disabled;
+    els.submitBtn.title = blocked ? "Complete first-time setup in Identity before staging posts." : "";
+  }
 }
 
 async function announceNodeProfile() {
