@@ -1240,9 +1240,10 @@ async function buildSemanticTags({ autoTagEnabled, existingTags, text, blocks, l
 
   const corpus = buildTagCorpus(text, blocks, links);
   const namedPhrases = extractNamedPhraseTags(corpus).slice(0, 5);
+  const contextTags = inferContextTags(corpus, namedPhrases);
   const ollamaTags = await generateTagsWithOllama(corpus, manual);
-  const fallbackTags = extractKeywordTags(corpus, [...manual, ...namedPhrases]);
-  const merged = normalizeTagList([...manual, ...namedPhrases, ...ollamaTags, ...fallbackTags]).slice(0, 12);
+  const fallbackTags = extractKeywordTags(corpus, [...manual, ...namedPhrases, ...contextTags]);
+  const merged = normalizeTagList([...manual, ...namedPhrases, ...contextTags, ...ollamaTags, ...fallbackTags]).slice(0, 12);
   return dropSubsumedTags(merged).slice(0, 10);
 }
 
@@ -1268,6 +1269,7 @@ async function generateTagsWithOllama(corpus, existingTags) {
     'Generate up to 8 concise content tags as comma-separated words/phrases.',
     'Use lowercase. No hashtags. No numbering. No explanation.',
     'Avoid filler or mood words like: almost, here, fired up, excited, awesome, great, cool.',
+    'Include one medium/domain tag when clear (examples: tv, movie, music, sports, gaming, coding).',
     `Existing tags: ${existingTags.join(', ') || '(none)'}`,
     'Content:',
     corpus.slice(0, 3000)
@@ -1398,6 +1400,28 @@ function extractNamedPhraseTags(corpus) {
   return out;
 }
 
+function inferContextTags(corpus, namedPhrases) {
+  const text = String(corpus || '').toLowerCase();
+  const out = [];
+
+  const tvHints = ['tv', 'show', 'series', 'episode', 'season premiere', 'season finale', 'streaming', 'netflix', 'hulu', 'hbo', 'amc'];
+  const movieHints = ['movie', 'film', 'cinema', 'box office', 'director'];
+  const musicHints = ['song', 'album', 'artist', 'band', 'playlist', 'music'];
+  const sportsHints = ['baseball', 'mlb', 'nfl', 'nba', 'nhl', 'soccer', 'football', 'playoffs', 'opening day'];
+
+  if (tvHints.some((h) => text.includes(h))) out.push('tv');
+  if (movieHints.some((h) => text.includes(h))) out.push('movie');
+  if (musicHints.some((h) => text.includes(h))) out.push('music');
+  if (sportsHints.some((h) => text.includes(h))) out.push('sports');
+
+  // If user asks "fans of <named phrase>?" this is often media fandom; default to tv when medium is otherwise unknown.
+  if (!out.includes('tv') && !out.includes('movie') && /\bfans of\b/.test(text) && Array.isArray(namedPhrases) && namedPhrases.length > 0) {
+    out.push('tv');
+  }
+
+  return normalizeTagList(out).slice(0, 3);
+}
+
 function dropSubsumedTags(tags) {
   const list = Array.isArray(tags) ? tags : [];
   const sorted = [...list].sort((a, b) => b.length - a.length);
@@ -1411,7 +1435,9 @@ function dropSubsumedTags(tags) {
       if (!bigger.includes(lower)) return false;
       if (bigger === lower) return true;
       const lowWords = lower.split(/\s+/).filter(Boolean);
+      const bigWords = bigger.split(/\s+/).filter(Boolean);
       if (lowWords.length <= 1 && lower.length <= 5) return true;
+      if (lowWords.length <= 2 && bigWords.length >= lowWords.length + 2) return true;
       return false;
     });
     if (!isSubsumed) kept.push(lower);
