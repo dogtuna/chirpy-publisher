@@ -1322,7 +1322,8 @@ async function buildSemanticTags({ autoTagEnabled, existingTags, text, blocks, l
     : extractKeywordTags(corpus, [...curated]);
   const merged = normalizeTagList([...curated, ...fallbackTags]).slice(0, 12);
   const compact = dropSubsumedTags(merged);
-  return filterNamedPhraseFragments(compact, [...namedPhrases, ...mediaTitles]).slice(0, 10);
+  const filtered = filterNamedPhraseFragments(compact, [...namedPhrases, ...mediaTitles]).slice(0, 10);
+  return applyDisambiguationGuards(corpus, filtered);
 }
 
 function prioritizeAudienceTags(tags, context) {
@@ -1346,6 +1347,47 @@ function prioritizeAudienceTags(tags, context) {
     ordered.push(...Array.from(buckets));
   }
   return normalizeTagList(ordered).slice(0, 10);
+}
+
+function applyDisambiguationGuards(corpus, tags) {
+  const text = String(corpus || '').toLowerCase();
+  let out = normalizeTagList(tags);
+
+  const gardeningCues = ['magnolia', 'freeze', 'soil', 'seeds', 'roots', 'sprout', 'planting', 'garden', 'weather'];
+  const mediaCues = ['tv', 'series', 'episode', 'season finale', 'streaming', 'netflix', 'hbo', 'movie', 'film', 'cinema'];
+  const gardeningScore = gardeningCues.reduce((n, cue) => (text.includes(cue) ? n + 1 : n), 0);
+  const mediaScore = mediaCues.reduce((n, cue) => (text.includes(cue) ? n + 1 : n), 0);
+
+  // Resolve real-world plant/garden context vs media-brand ambiguity.
+  if (gardeningScore >= 2 && mediaScore === 0) {
+    out = out.filter((tag) => !['entertainment', 'tv', 'movies', 'tv-fans', 'movie-fans'].includes(tag));
+    if (!out.includes('lifestyle')) out.push('lifestyle');
+    if (!out.includes('gardeners')) out.push('gardeners');
+  }
+
+  const educationCues = [
+    'curriculum',
+    'learning objectives',
+    'module',
+    'instructional',
+    'pedagogy',
+    'lesson',
+    'student',
+    'classroom',
+    'user-centered design'
+  ];
+  const gamingHardCues = ['xbox', 'playstation', 'nintendo', 'steam', 'esports', 'gameplay', 'multiplayer', 'rpg'];
+  const educationScore = educationCues.reduce((n, cue) => (text.includes(cue) ? n + 1 : n), 0);
+  const gamingHardScore = gamingHardCues.reduce((n, cue) => (text.includes(cue) ? n + 1 : n), 0);
+
+  // Resolve idiomatic "game/leveling up" in professional/education context.
+  if (educationScore >= 2 && gamingHardScore === 0) {
+    out = out.filter((tag) => !['gaming', 'gamers'].includes(tag));
+    if (!out.includes('education')) out.push('education');
+    if (!out.includes('educators')) out.push('educators');
+  }
+
+  return normalizeTagList(out).slice(0, 10);
 }
 
 async function analyzePostSemantics(corpus) {
