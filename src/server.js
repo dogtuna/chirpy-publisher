@@ -819,6 +819,16 @@ async function listIpfsKeysSafe() {
 
 async function loadPeerId() {
   try {
+    const apiResp = await fetch('http://127.0.0.1:5001/api/v0/id', { method: 'POST' });
+    if (apiResp.ok) {
+      const body = await apiResp.json();
+      const id = String(body?.ID || '').trim();
+      if (id) return id;
+    }
+  } catch (_error) {
+    // continue with cli fallback
+  }
+  try {
     const id = (await runExec(IPFS_CMD, ['id', '-f=<id>'], 4000)).trim();
     return id || null;
   } catch (_error) {

@@ -317,6 +317,8 @@ async function computeWalkthroughChecklist() {
   } catch (_error) {
     // keep defaults
   }
+  const desktopIpfsRunning = Boolean(state.desktopStatus?.sidecars?.ipfs?.running);
+  if (desktopIpfsRunning) ipfsAvailable = true;
 
   items.push({
     label: "Save a node label",
