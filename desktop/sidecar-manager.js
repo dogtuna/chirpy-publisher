@@ -123,38 +123,17 @@ class SidecarManager {
     await fs.mkdir(modelsPath, { recursive: true });
     try {
       await this.ensureExecutable(ollamaBin);
-      let ollamaSpawnError = null;
-      let ollamaExitInfo = null;
-      let ollamaStderr = '';
-      this.ollamaProcess = spawn(ollamaBin, ['serve'], {
-        stdio: ['ignore', 'ignore', 'pipe'],
-        env: {
-          ...process.env,
-          OLLAMA_MODELS: modelsPath,
-          OLLAMA_HOST: '127.0.0.1:11434'
-        }
-      });
-      this.ollamaProcess.on('error', (error) => {
-        ollamaSpawnError = error;
-        this.state.ollama.running = false;
-      });
-      this.ollamaProcess.stderr.on('data', (chunk) => {
-        const text = String(chunk || '').trim();
-        if (!text) return;
-        ollamaStderr = `${ollamaStderr}\n${text}`.trim().slice(-1200);
-      });
-      this.ollamaProcess.on('exit', (code, signal) => {
-        ollamaExitInfo = { code, signal };
-        this.state.ollama.running = false;
-      });
-
-      await this.waitFor(async () => {
-        if (ollamaSpawnError) throw ollamaSpawnError;
-        if (ollamaExitInfo) {
-          throw new Error(`ollama exited early (code=${String(ollamaExitInfo.code)}, signal=${String(ollamaExitInfo.signal || '')})${ollamaStderr ? `: ${ollamaStderr}` : ''}`);
-        }
-        return this.ollamaResponding();
-      }, 60000, 500);
+      const env = {
+        ...process.env,
+        OLLAMA_MODELS: modelsPath,
+        OLLAMA_HOST: '127.0.0.1:11434'
+      };
+      try {
+        await this.launchOllamaAndWait(ollamaBin, ['serve'], env);
+      } catch (error) {
+        if (!/serve command not supported/i.test(String(error?.message || ''))) throw error;
+        await this.launchOllamaAndWait(ollamaBin, [], env);
+      }
       this.state.ollama = { ...this.state.ollama, available: true, running: true, source: 'bundled', error: '' };
       await this.ensureOllamaModels(ollamaBin);
     } catch (error) {
@@ -179,33 +158,13 @@ class SidecarManager {
     const candidates = await this.resolveSystemOllamaCandidates();
     for (const candidate of candidates) {
       try {
-        let spawnError = null;
-        let exitInfo = null;
-        let stderrTail = '';
-        this.ollamaProcess = spawn(candidate, ['serve'], {
-        stdio: ['ignore', 'ignore', 'pipe'],
-        env: { ...process.env, OLLAMA_HOST: '127.0.0.1:11434' }
-      });
-        this.ollamaProcess.on('error', (error) => {
-          spawnError = error;
-          this.state.ollama.running = false;
-        });
-        this.ollamaProcess.stderr.on('data', (chunk) => {
-          const text = String(chunk || '').trim();
-          if (!text) return;
-          stderrTail = `${stderrTail}\n${text}`.trim().slice(-1200);
-        });
-        this.ollamaProcess.on('exit', (code, signal) => {
-          exitInfo = { code, signal };
-          this.state.ollama.running = false;
-        });
-        await this.waitFor(async () => {
-          if (spawnError) throw spawnError;
-          if (exitInfo) {
-            throw new Error(`ollama exited early (code=${String(exitInfo.code)}, signal=${String(exitInfo.signal || '')})${stderrTail ? `: ${stderrTail}` : ''}`);
-          }
-          return this.ollamaResponding();
-        }, 60000, 500);
+        const env = { ...process.env, OLLAMA_HOST: '127.0.0.1:11434' };
+        try {
+          await this.launchOllamaAndWait(candidate, ['serve'], env);
+        } catch (error) {
+          if (!/serve command not supported/i.test(String(error?.message || ''))) throw error;
+          await this.launchOllamaAndWait(candidate, [], env);
+        }
         this.state.ollama.binaryPath = candidate === 'ollama' ? (this.state.ollama.binaryPath || 'ollama') : candidate;
         return true;
       } catch (_error) {
@@ -225,6 +184,36 @@ class SidecarManager {
       }
     }
     return false;
+  }
+
+  async launchOllamaAndWait(candidate, args, env) {
+    let spawnError = null;
+    let exitInfo = null;
+    let stderrTail = '';
+    this.ollamaProcess = spawn(candidate, Array.isArray(args) ? args : ['serve'], {
+      stdio: ['ignore', 'ignore', 'pipe'],
+      env: env || { ...process.env, OLLAMA_HOST: '127.0.0.1:11434' }
+    });
+    this.ollamaProcess.on('error', (error) => {
+      spawnError = error;
+      this.state.ollama.running = false;
+    });
+    this.ollamaProcess.stderr.on('data', (chunk) => {
+      const text = String(chunk || '').trim();
+      if (!text) return;
+      stderrTail = `${stderrTail}\n${text}`.trim().slice(-1200);
+    });
+    this.ollamaProcess.on('exit', (code, signal) => {
+      exitInfo = { code, signal };
+      this.state.ollama.running = false;
+    });
+    await this.waitFor(async () => {
+      if (spawnError) throw spawnError;
+      if (exitInfo) {
+        throw new Error(`ollama exited early (code=${String(exitInfo.code)}, signal=${String(exitInfo.signal || '')})${stderrTail ? `: ${stderrTail}` : ''}`);
+      }
+      return this.ollamaResponding();
+    }, 60000, 500);
   }
 
   async ensureOllamaModels(ollamaBin) {
