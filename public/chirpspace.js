@@ -254,7 +254,8 @@ async function loadRadar() {
     const users = Array.isArray(usersData.users) ? usersData.users : [];
     const tagsByDid = aggregateTagsByDid(Array.isArray(postsData.posts) ? postsData.posts : []);
     const candidates = users.map((user) => {
-      const tags = tagsByDid.get(user.profileDid) || [];
+      const announcedTags = Array.isArray(user.tags) ? user.tags : [];
+      const tags = tagsByDid.get(user.profileDid) || announcedTags;
       return {
         id: user.id,
         name: user.name || "unnamed",

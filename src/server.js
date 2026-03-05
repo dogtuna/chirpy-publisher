@@ -99,6 +99,7 @@ const protocolSchemas = {
       name: { type: 'string', minLength: 3, maxLength: 40 },
       profileDid: { type: 'string' },
       profileIpnsKey: { type: 'string' },
+      publicTags: { type: 'array', items: { type: 'string' } },
       version: { type: 'string' },
       timestamp: { type: 'string', format: 'date-time' }
     },
@@ -706,17 +707,24 @@ app.get('/api/users', (_req, res) => {
 });
 
 app.get('/api/presence/self', (_req, res) => {
-  const presence = {
-    schema: 'chirpy.presence/1.0.0',
-    id: presenceState.instanceId || '',
-    peerId: presenceState.peerId || '',
-    name: presenceState.nodeName || '',
-    profileDid: presenceState.profileDid || '',
-    profileIpnsKey: presenceState.profileIpnsKey || '',
-    version: '1.0.0',
-    timestamp: new Date().toISOString()
-  };
-  res.json({ ok: true, presence });
+  buildPresencePayload()
+    .then((presence) => {
+      res.json({ ok: true, presence });
+    })
+    .catch((_error) => {
+      const presence = {
+        schema: 'chirpy.presence/1.0.0',
+        id: presenceState.instanceId || '',
+        peerId: presenceState.peerId || '',
+        name: presenceState.nodeName || '',
+        profileDid: presenceState.profileDid || '',
+        profileIpnsKey: presenceState.profileIpnsKey || '',
+        publicTags: [],
+        version: '1.0.0',
+        timestamp: new Date().toISOString()
+      };
+      res.json({ ok: true, presence });
+    });
 });
 
 app.get('/api/protocol/schemas', (_req, res) => {
@@ -933,22 +941,15 @@ function handlePresencePubsubLine(line) {
     name: payload.name ? String(payload.name) : '',
     profileDid: payload.profileDid ? String(payload.profileDid) : '',
     profileIpnsKey: payload.profileIpnsKey ? String(payload.profileIpnsKey) : '',
+    publicTags: Array.isArray(payload.publicTags) ? payload.publicTags : [],
     source: 'pubsub',
     timestamp: payload.timestamp
   });
 }
 
 async function publishHeartbeat() {
-  const payload = JSON.stringify({
-    schema: 'chirpy.presence/1.0.0',
-    id: presenceState.instanceId,
-    peerId: presenceState.peerId || '',
-    name: presenceState.nodeName,
-    profileDid: presenceState.profileDid || '',
-    profileIpnsKey: presenceState.profileIpnsKey || '',
-    version: '1.0.0',
-    timestamp: new Date().toISOString()
-  });
+  const presencePayload = await buildPresencePayload();
+  const payload = JSON.stringify(presencePayload);
 
   try {
     await ipfsPubsubPublish(presenceTopic, payload);
@@ -962,9 +963,50 @@ async function publishHeartbeat() {
     name: presenceState.nodeName,
     profileDid: presenceState.profileDid,
     profileIpnsKey: presenceState.profileIpnsKey,
+    publicTags: presencePayload.publicTags || [],
     source: 'self',
     timestamp: new Date().toISOString()
   });
+}
+
+async function buildPresencePayload() {
+  const publicTags = await collectPublicTagsForDid(presenceState.profileDid || '');
+  return {
+    schema: 'chirpy.presence/1.0.0',
+    id: presenceState.instanceId,
+    peerId: presenceState.peerId || '',
+    name: presenceState.nodeName,
+    profileDid: presenceState.profileDid || '',
+    profileIpnsKey: presenceState.profileIpnsKey || '',
+    publicTags,
+    version: '1.0.0',
+    timestamp: new Date().toISOString()
+  };
+}
+
+async function collectPublicTagsForDid(did) {
+  const targetDid = String(did || '').trim();
+  if (!targetDid) return [];
+  try {
+    const entries = await fs.readdir(stageRoot, { withFileTypes: true });
+    const directories = entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
+    const seen = new Set();
+    for (const stageId of directories) {
+      const record = await loadChirpSpacePost(stageId);
+      if (!record) continue;
+      if (record.visibility !== 'public') continue;
+      if (String(record.userDid || '').trim() !== targetDid) continue;
+      const tags = Array.isArray(record.tags) ? record.tags : [];
+      for (const tag of tags) {
+        const clean = String(tag || '').trim().toLowerCase();
+        if (clean) seen.add(clean);
+      }
+      if (seen.size >= 8) break;
+    }
+    return Array.from(seen).slice(0, 8);
+  } catch (_error) {
+    return [];
+  }
 }
 
 async function ipfsPubsubPublish(topic, payload) {
@@ -994,6 +1036,7 @@ function startLanPresence() {
       name: payload.name ? String(payload.name) : '',
       profileDid: payload.profileDid ? String(payload.profileDid) : '',
       profileIpnsKey: payload.profileIpnsKey ? String(payload.profileIpnsKey) : '',
+      publicTags: Array.isArray(payload.publicTags) ? payload.publicTags : [],
       source: 'lan',
       timestamp: payload.timestamp
     });
@@ -1010,16 +1053,7 @@ function startLanPresence() {
 
 async function publishLanHeartbeat() {
   if (!presenceState.lanSocket) return;
-  const payload = JSON.stringify({
-    schema: 'chirpy.presence/1.0.0',
-    id: presenceState.instanceId,
-    peerId: presenceState.peerId || '',
-    name: presenceState.nodeName,
-    profileDid: presenceState.profileDid || '',
-    profileIpnsKey: presenceState.profileIpnsKey || '',
-    version: '1.0.0',
-    timestamp: new Date().toISOString()
-  });
+  const payload = JSON.stringify(await buildPresencePayload());
   await new Promise((resolve) => {
     presenceState.lanSocket.send(Buffer.from(payload, 'utf8'), LAN_PRESENCE_PORT, LAN_PRESENCE_ADDR, () => resolve());
   });
@@ -1084,6 +1118,7 @@ async function probeLanHttpPeer(host) {
       name: payload.name ? String(payload.name) : '',
       profileDid: payload.profileDid ? String(payload.profileDid) : '',
       profileIpnsKey: payload.profileIpnsKey ? String(payload.profileIpnsKey) : '',
+      publicTags: Array.isArray(payload.publicTags) ? payload.publicTags : [],
       source: 'lan-http',
       timestamp: payload.timestamp
     });
@@ -1092,7 +1127,7 @@ async function probeLanHttpPeer(host) {
   }
 }
 
-function recordUser({ id, peerId, name, profileDid, profileIpnsKey, source, timestamp }) {
+function recordUser({ id, peerId, name, profileDid, profileIpnsKey, publicTags, source, timestamp }) {
   const safeId = String(id || '').trim();
   if (!safeId) return;
 
@@ -1104,6 +1139,7 @@ function recordUser({ id, peerId, name, profileDid, profileIpnsKey, source, time
     name: String(name || existing.name || '').trim(),
     profileDid: String(profileDid || existing.profileDid || '').trim(),
     profileIpnsKey: String(profileIpnsKey || existing.profileIpnsKey || '').trim(),
+    publicTags: normalizeTagList(Array.isArray(publicTags) ? publicTags : existing.publicTags || []).slice(0, 8),
     source: String(source || existing.source || 'pubsub'),
     lastActivity: nowIso
   };
@@ -1131,6 +1167,7 @@ function getOrderedUsers() {
         name: user.name || '',
         profileDid: user.profileDid || '',
         profileIpnsKey: user.profileIpnsKey || '',
+        tags: normalizeTagList(user.publicTags || []).slice(0, 8),
         source: user.source || 'pubsub',
         lastActivity: user.lastActivity || null,
         active: isActive
@@ -1150,6 +1187,7 @@ async function hydrateUsers() {
       name: String(user.name || ''),
       profileDid: String(user.profileDid || ''),
       profileIpnsKey: String(user.profileIpnsKey || ''),
+      publicTags: normalizeTagList(user.tags || user.publicTags || []).slice(0, 8),
       source: String(user.source || 'pubsub'),
       lastActivity: String(user.lastActivity || '')
     });
