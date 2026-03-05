@@ -124,6 +124,7 @@ class SidecarManager {
     try {
       await this.ensureExecutable(ollamaBin);
       let ollamaSpawnError = null;
+      let ollamaExitInfo = null;
       this.ollamaProcess = spawn(ollamaBin, ['serve'], {
         stdio: ['ignore', 'ignore', 'pipe'],
         env: {
@@ -137,12 +138,16 @@ class SidecarManager {
         this.state.ollama.running = false;
       });
       this.ollamaProcess.stderr.on('data', () => null);
-      this.ollamaProcess.on('exit', () => {
+      this.ollamaProcess.on('exit', (code, signal) => {
+        ollamaExitInfo = { code, signal };
         this.state.ollama.running = false;
       });
 
       await this.waitFor(async () => {
         if (ollamaSpawnError) throw ollamaSpawnError;
+        if (ollamaExitInfo) {
+          throw new Error(`ollama exited early (code=${String(ollamaExitInfo.code)}, signal=${String(ollamaExitInfo.signal || '')})`);
+        }
         return this.ollamaResponding();
       }, 60000, 500);
       this.state.ollama = { ...this.state.ollama, available: true, running: true, source: 'bundled', error: '' };
@@ -166,28 +171,39 @@ class SidecarManager {
   }
 
   async tryStartExternalOllama() {
-    try {
-      let spawnError = null;
-      this.ollamaProcess = spawn('ollama', ['serve'], {
+    const candidates = await this.resolveSystemOllamaCandidates();
+    for (const candidate of candidates) {
+      try {
+        let spawnError = null;
+        let exitInfo = null;
+        this.ollamaProcess = spawn(candidate, ['serve'], {
         stdio: ['ignore', 'ignore', 'pipe'],
         env: { ...process.env, OLLAMA_HOST: '127.0.0.1:11434' }
       });
-      this.ollamaProcess.on('error', (error) => {
-        spawnError = error;
-        this.state.ollama.running = false;
-      });
-      this.ollamaProcess.stderr.on('data', () => null);
-      this.ollamaProcess.on('exit', () => {
-        this.state.ollama.running = false;
-      });
-      await this.waitFor(async () => {
-        if (spawnError) throw spawnError;
-        return this.ollamaResponding();
-      }, 60000, 500);
-      return true;
-    } catch (_error) {
-      return false;
+        this.ollamaProcess.on('error', (error) => {
+          spawnError = error;
+          this.state.ollama.running = false;
+        });
+        this.ollamaProcess.stderr.on('data', () => null);
+        this.ollamaProcess.on('exit', (code, signal) => {
+          exitInfo = { code, signal };
+          this.state.ollama.running = false;
+        });
+        await this.waitFor(async () => {
+          if (spawnError) throw spawnError;
+          if (exitInfo) {
+            throw new Error(`ollama exited early (code=${String(exitInfo.code)}, signal=${String(exitInfo.signal || '')})`);
+          }
+          return this.ollamaResponding();
+        }, 60000, 500);
+        this.state.ollama.binaryPath = candidate === 'ollama' ? (this.state.ollama.binaryPath || 'ollama') : candidate;
+        return true;
+      } catch (_error) {
+        await this.stopChild(this.ollamaProcess);
+        this.ollamaProcess = null;
+      }
     }
+    return false;
   }
 
   async ensureOllamaModels(ollamaBin) {
@@ -572,6 +588,34 @@ class SidecarManager {
     } catch (_error) {
       // keep going; spawn will surface real failure
     }
+  }
+
+  async resolveSystemOllamaCandidates() {
+    const out = [];
+    const add = (value) => {
+      const clean = String(value || '').trim();
+      if (!clean) return;
+      if (!out.includes(clean)) out.push(clean);
+    };
+    add('ollama');
+    add(process.env.OLLAMA_BIN);
+    add('/opt/homebrew/bin/ollama');
+    add('/usr/local/bin/ollama');
+    add('/Applications/Ollama.app/Contents/MacOS/Ollama');
+    const existing = [];
+    for (const candidate of out) {
+      if (candidate === 'ollama') {
+        existing.push(candidate);
+        continue;
+      }
+      try {
+        await fs.access(candidate);
+        existing.push(candidate);
+      } catch (_error) {
+        // ignore
+      }
+    }
+    return existing;
   }
 }
 
