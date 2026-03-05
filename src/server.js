@@ -437,17 +437,13 @@ app.post('/stage', upload.array('media', 50), async (req, res) => {
       links.push(card);
     }
 
-    const semanticTags = await withTimeout(
-      buildSemanticTags({
-        autoTagEnabled,
-        existingTags: tags,
-        text,
-        blocks,
-        links
-      }),
-      12000,
-      []
-    );
+    const semanticTags = await buildSemanticTags({
+      autoTagEnabled,
+      existingTags: tags,
+      text,
+      blocks,
+      links
+    });
     const finalTags = normalizeTagList([...tags, ...semanticTags]).slice(0, 12);
 
     const createdAt = new Date().toISOString();
@@ -1304,7 +1300,7 @@ async function buildSemanticTags({ autoTagEnabled, existingTags, text, blocks, l
   const subtopicCandidates = normalizeTagList([...(semantic.subtopics || []), ...inferredNiches])
     .filter((x) => !isWeakAudienceTag(x))
     .slice(0, 6);
-  const subtopics = await filterSubtopicsBySemanticFit(subtopicCandidates, corpus, semantic.bucket);
+  const subtopics = await refineSubtopicsForContext(corpus, semantic.bucket, subtopicCandidates);
   const entities = normalizeTagList(semantic.entities || []).filter((x) => !isWeakTag(x)).slice(0, 2);
 
   const merged = normalizeTagList([
@@ -1314,6 +1310,11 @@ async function buildSemanticTags({ autoTagEnabled, existingTags, text, blocks, l
     ...subtopics,
     ...entities
   ]).slice(0, 12);
+  if (!merged.length) {
+    if (bucketTag.length) return bucketTag.slice(0, 2);
+    if (audienceTag.length) return audienceTag.slice(0, 2);
+    return ['general'];
+  }
   const compact = dropSubsumedTags(merged);
   const filtered = compact.slice(0, 10);
   return applyDisambiguationGuards(corpus, filtered);
@@ -1328,14 +1329,6 @@ async function fetchJsonWithTimeout(url, options, timeoutMs = OLLAMA_TIMEOUT_MS)
   } finally {
     clearTimeout(timer);
   }
-}
-
-async function withTimeout(taskPromise, timeoutMs, fallback) {
-  const limit = Math.max(500, Number(timeoutMs) || 0);
-  return await Promise.race([
-    Promise.resolve(taskPromise),
-    new Promise((resolve) => setTimeout(() => resolve(fallback), limit))
-  ]);
 }
 
 async function classifyPostSemanticRoute(corpus) {
@@ -1475,43 +1468,56 @@ async function inferNicheDepthTags(corpus, bucket, audience) {
   }
 }
 
-async function filterSubtopicsBySemanticFit(subtopics, corpus, bucket) {
+async function refineSubtopicsForContext(corpus, bucket, subtopics) {
   const candidates = normalizeTagList(subtopics || []).slice(0, 6);
-  const selectedBucket = String(bucket || '').toLowerCase().trim();
-  if (!candidates.length || !selectedBucket || !MODEL_BUCKETS.includes(selectedBucket)) {
+  const selectedBucket = String(bucket || '').toLowerCase().trim() || 'general';
+  if (!candidates.length) {
     return candidates.slice(0, 4);
   }
 
-  const postVector = await getEmbeddingVector(String(corpus || '').slice(0, 2600));
-  if (!postVector.length) return candidates.slice(0, 4);
+  const text = String(corpus || '').trim();
+  const host = String(process.env.OLLAMA_HOST || 'http://127.0.0.1:11434').trim();
+  const model = String(process.env.OLLAMA_MODEL || 'llama3.2:3b').trim();
+  const prompt = [
+    'You validate niche tags for semantic consistency.',
+    'Return strict JSON only: {"accepted":["..."]}',
+    `Selected top-level bucket: ${selectedBucket}`,
+    `Candidate niches: ${candidates.join(', ')}`,
+    'Keep only candidates that are context-consistent with the post meaning.',
+    'Reject candidates that represent a different domain due to ambiguous words.',
+    'accepted must be a subset of candidate niches.',
+    'Post:',
+    text.slice(0, 2400)
+  ].join('\n');
 
-  const kept = [];
-  for (const topic of candidates) {
-    const vec = await getEmbeddingVector(`topic: ${topic}`);
-    if (!vec.length) {
-      kept.push(topic);
-      continue;
-    }
-
-    const postScore = cosineSimilarity(postVector, vec);
-    if (!Number.isFinite(postScore) || postScore < 0.14) continue;
-
-    const bucketScores = await scoreTaxonomy(vec, BUCKET_TAXONOMY, 'bucket-subtopic');
-    if (!bucketScores.length) {
-      kept.push(topic);
-      continue;
-    }
-
-    const best = bucketScores[0];
-    const selected = bucketScores.find((x) => x.tag === selectedBucket);
-    const selectedScore = Number(selected?.score || 0);
-    const bestScore = Number(best?.score || 0);
-    if (best?.tag === selectedBucket || selectedScore >= bestScore - 0.03) {
-      kept.push(topic);
-    }
+  try {
+    const response = await fetchJsonWithTimeout(`${host}/api/generate`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model,
+        prompt,
+        stream: false,
+        format: 'json',
+        options: { temperature: 0.1 }
+      })
+    }, OLLAMA_TIMEOUT_MS);
+    if (!response.ok) return candidates.slice(0, 4);
+    const data = await response.json();
+    const parsed = parseLooseJsonObject(String(data?.response || '').trim());
+    const acceptedRaw = Array.isArray(parsed?.accepted)
+      ? parsed.accepted
+      : String(parsed?.accepted || '')
+          .split(',')
+          .map((x) => x.trim())
+          .filter(Boolean);
+    const allowed = new Set(candidates);
+    const accepted = normalizeTagList(acceptedRaw).filter((x) => allowed.has(x)).slice(0, 4);
+    if (!accepted.length) return candidates.slice(0, 4);
+    return accepted;
+  } catch (_error) {
+    return candidates.slice(0, 4);
   }
-
-  return normalizeTagList(kept).slice(0, 4);
 }
 
 function coerceAllowedTag(value, allowed) {
