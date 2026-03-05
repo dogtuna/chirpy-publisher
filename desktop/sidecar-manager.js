@@ -123,20 +123,18 @@ class SidecarManager {
     await fs.mkdir(modelsPath, { recursive: true });
     try {
       await this.ensureExecutable(ollamaBin);
+      const bundledSupportsServe = await this.binarySupportsServe(ollamaBin);
+      if (!bundledSupportsServe) {
+        throw new Error(
+          'ollama binary does not support daemon mode (`serve`). Use the CLI/server binary for this platform in resources/bin.'
+        );
+      }
       const env = {
         ...process.env,
         OLLAMA_MODELS: modelsPath,
         OLLAMA_HOST: '127.0.0.1:11434'
       };
-      try {
-        await this.launchOllamaAndWait(ollamaBin, ['serve'], env);
-      } catch (error) {
-        const message = String(error?.message || '');
-        if (!/serve command not supported/i.test(message)) throw error;
-        throw new Error(
-          'ollama binary does not support daemon mode (`serve`). Use the CLI/server binary for this platform in resources/bin.'
-        );
-      }
+      await this.launchOllamaAndWait(ollamaBin, ['serve'], env);
       this.state.ollama = { ...this.state.ollama, available: true, running: true, source: 'bundled', error: '' };
       await this.ensureOllamaModels(ollamaBin);
     } catch (error) {
@@ -161,14 +159,11 @@ class SidecarManager {
     const candidates = await this.resolveSystemOllamaCandidates();
     for (const candidate of candidates) {
       try {
-        const env = { ...process.env, OLLAMA_HOST: '127.0.0.1:11434' };
-        try {
-          await this.launchOllamaAndWait(candidate, ['serve'], env);
-        } catch (error) {
-          const message = String(error?.message || '');
-          if (!/serve command not supported/i.test(message)) throw error;
-          throw new Error('external ollama binary does not support daemon mode (`serve`)');
+        if (!(await this.binarySupportsServe(candidate))) {
+          continue;
         }
+        const env = { ...process.env, OLLAMA_HOST: '127.0.0.1:11434' };
+        await this.launchOllamaAndWait(candidate, ['serve'], env);
         this.state.ollama.binaryPath = candidate === 'ollama' ? (this.state.ollama.binaryPath || 'ollama') : candidate;
         return true;
       } catch (_error) {
@@ -627,6 +622,7 @@ class SidecarManager {
     add(process.env.OLLAMA_BIN);
     add('/opt/homebrew/bin/ollama');
     add('/usr/local/bin/ollama');
+    add('/Applications/Ollama.app/Contents/Resources/ollama');
     const existing = [];
     for (const candidate of out) {
       if (candidate === 'ollama') {
@@ -641,6 +637,17 @@ class SidecarManager {
       }
     }
     return existing;
+  }
+
+  async binarySupportsServe(binaryPath) {
+    const candidate = String(binaryPath || '').trim();
+    if (!candidate) return false;
+    try {
+      const help = await this.execFileSafe(candidate, ['--help'], 5000);
+      return /\bserve\b/i.test(String(help || ''));
+    } catch (_error) {
+      return false;
+    }
   }
 }
 
