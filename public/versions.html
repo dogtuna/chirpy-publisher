@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Chirpy Publisher — Design Versions</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+
+    * { box-sizing: border-box; margin: 0; }
+
+    body {
+      font-family: 'Inter', -apple-system, sans-serif;
+      background: #0e1117;
+      color: #e2e8f0;
+      min-height: 100vh;
+      padding: 3rem 2rem;
+    }
+
+    .header {
+      text-align: center;
+      margin-bottom: 3rem;
+    }
+    .header .eyebrow {
+      color: #a855f7;
+      text-transform: uppercase;
+      letter-spacing: 0.15em;
+      font-weight: 700;
+      font-size: 0.72rem;
+      margin-bottom: 0.5rem;
+    }
+    .header h1 {
+      font-size: 2.5rem;
+      font-weight: 800;
+      background: linear-gradient(135deg, #00d4aa, #a855f7, #ec4899);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      margin-bottom: 0.5rem;
+    }
+    .header p {
+      color: #8b95a5;
+      font-size: 1.05rem;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+      gap: 1.5rem;
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    .card {
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 16px;
+      padding: 2rem;
+      transition: all 0.3s ease;
+      cursor: pointer;
+      text-decoration: none;
+      color: inherit;
+      display: block;
+    }
+    .card:hover {
+      border-color: rgba(168, 85, 247, 0.4);
+      box-shadow: 0 8px 40px rgba(168, 85, 247, 0.12);
+      transform: translateY(-4px);
+    }
+
+    .card .number {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 36px; height: 36px;
+      border-radius: 10px;
+      font-weight: 800;
+      font-size: 0.9rem;
+      margin-bottom: 1rem;
+    }
+
+    .card:nth-child(1) .number { background: rgba(0, 212, 170, 0.15); color: #00d4aa; }
+    .card:nth-child(2) .number { background: rgba(67, 97, 238, 0.15); color: #4361ee; }
+    .card:nth-child(3) .number { background: rgba(0, 255, 65, 0.12); color: #00ff41; }
+    .card:nth-child(4) .number { background: rgba(168, 85, 247, 0.15); color: #a855f7; }
+    .card:nth-child(5) .number { background: rgba(139, 26, 26, 0.2); color: #d4694a; }
+
+    .card h2 {
+      font-size: 1.3rem;
+      font-weight: 700;
+      margin-bottom: 0.35rem;
+    }
+    .card .subtitle {
+      color: #8b95a5;
+      font-size: 0.82rem;
+      font-weight: 600;
+      margin-bottom: 0.75rem;
+    }
+    .card p {
+      color: #6b7280;
+      font-size: 0.88rem;
+      line-height: 1.5;
+    }
+
+    .card .links {
+      margin-top: 1.25rem;
+      display: flex;
+      gap: 0.75rem;
+    }
+    .card .links a {
+      font-size: 0.82rem;
+      font-weight: 600;
+      padding: 0.4rem 1rem;
+      border-radius: 8px;
+      text-decoration: none;
+      transition: all 0.2s;
+    }
+    .card:nth-child(1) .links a { background: rgba(0, 212, 170, 0.12); color: #00d4aa; }
+    .card:nth-child(2) .links a { background: rgba(67, 97, 238, 0.12); color: #4361ee; }
+    .card:nth-child(3) .links a { background: rgba(0, 255, 65, 0.08); color: #00ff41; }
+    .card:nth-child(4) .links a { background: rgba(168, 85, 247, 0.12); color: #a855f7; }
+    .card:nth-child(5) .links a { background: rgba(139, 26, 26, 0.15); color: #d4694a; }
+    .card .links a:hover { opacity: 0.8; }
+
+    .footer {
+      text-align: center;
+      margin-top: 3rem;
+      color: #4b5563;
+      font-size: 0.82rem;
+    }
+    .footer a { color: #a855f7; text-decoration: none; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="eyebrow">Sovereign Social</div>
+    <h1>Chirpy Publisher</h1>
+    <p>Five distinct design approaches — pick your vibe</p>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <div class="number">1</div>
+      <h2>Midnight Studio</h2>
+      <div class="subtitle">Dark · Cinematic · Glowing</div>
+      <p>Deep charcoal canvas with glowing teal accents. Ambient light effects, soft glow on hover states, and a moody professional feel.</p>
+      <div class="links">
+        <a href="/v1/">Publisher</a>
+        <a href="/v1/chirpspace.html">ChirpSpace</a>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="number">2</div>
+      <h2>Nordic Clean</h2>
+      <div class="subtitle">Minimal · Airy · Flat</div>
+      <p>Ultra-minimal with extreme whitespace and hairline borders. No shadows, no gradients — just clean structure with a single blue accent.</p>
+      <div class="links">
+        <a href="/v2/">Publisher</a>
+        <a href="/v2/chirpspace.html">ChirpSpace</a>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="number">3</div>
+      <h2>Retro Terminal</h2>
+      <div class="subtitle">Hacker · Monospace · CRT</div>
+      <p>Green-on-black phosphor monitor aesthetic with CRT scanlines. Monospace type, sharp borders, terminal-window panel frames.</p>
+      <div class="links">
+        <a href="/v3/">Publisher</a>
+        <a href="/v3/chirpspace.html">ChirpSpace</a>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="number">4</div>
+      <h2>Glass Panels</h2>
+      <div class="subtitle">Glassmorphism · Gradient · Floating</div>
+      <p>Frosted glass panels floating over an animated gradient background. Purple-pink accents with heavy backdrop-blur everywhere.</p>
+      <div class="links">
+        <a href="/v4/">Publisher</a>
+        <a href="/v4/chirpspace.html">ChirpSpace</a>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="number">5</div>
+      <h2>Editorial</h2>
+      <div class="subtitle">Magazine · Serif · Literary</div>
+      <p>Elegant magazine typography with Playfair Display and Source Serif. Horizontal rules instead of card borders, burgundy accents.</p>
+      <div class="links">
+        <a href="/v5/">Publisher</a>
+        <a href="/v5/chirpspace.html">ChirpSpace</a>
+      </div>
+    </div>
+  </div>
+
+  <div class="footer">
+    <a href="/">← Back to Original</a>
+  </div>
+</body>
+</html>

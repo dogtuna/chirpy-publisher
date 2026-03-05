@@ -1,0 +1,125 @@
+/* V5 — Editorial — ChirpSpace */
+.chirpspace-top {
+    max-width: 960px;
+    margin: 2.5rem auto 0;
+    padding: 1.5rem 0;
+    border: none;
+    border-bottom: 3px double var(--line);
+    background: transparent;
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 1rem;
+}
+
+.chirpspace-top h1 {
+    margin: 0.2rem 0;
+    font-family: 'Playfair Display', serif;
+    font-size: 2rem;
+    font-weight: 900;
+    font-style: italic;
+}
+
+.chirpspace-shell {
+    max-width: 960px;
+    margin: 2rem auto 3rem;
+}
+
+.chirpspace-feed {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+}
+
+.chirpspace-post {
+    border: none;
+    border-bottom: 1px solid var(--line);
+    border-radius: 0;
+    background: transparent;
+    padding: 1.75rem 0;
+}
+
+.post-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.6rem;
+    margin-bottom: 0.75rem;
+}
+
+.post-date {
+    font-size: 0.82rem;
+    color: var(--muted);
+    font-style: italic;
+}
+
+.post-tags {
+    font-size: 0.75rem;
+    color: var(--muted);
+    font-style: italic;
+}
+
+.post-visibility {
+    font-size: 0.62rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    border: 1px solid var(--brand);
+    border-radius: 0;
+    padding: 0.1rem 0.5rem;
+    background: transparent;
+    color: var(--brand);
+}
+
+.hidden {
+    display: none;
+}
+
+.post-text {
+    white-space: pre-wrap;
+    margin: 0 0 0.75rem 0;
+    font-size: 1.05rem;
+}
+
+.post-photos,
+.post-videos {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 0.75rem;
+    margin-bottom: 0.75rem;
+}
+
+.post-photos img,
+.post-videos video {
+    width: 100%;
+    border-radius: var(--radius);
+    border: 1px solid var(--line);
+}
+
+.post-link-card {
+    border: none;
+    border-left: 3px solid var(--brand);
+    padding: 0.5rem 1rem;
+    margin-bottom: 0.5rem;
+    background: transparent;
+}
+
+.post-link-card a {
+    color: var(--brand);
+    font-style: italic;
+}
+
+.empty-state {
+    border: 1px solid var(--line);
+    padding: 2rem;
+    background: transparent;
+    color: var(--muted);
+    font-style: italic;
+    text-align: center;
+}
+
+@media (max-width: 760px) {
+    .chirpspace-top {
+        flex-direction: column;
+        align-items: stretch;
+    }
+}

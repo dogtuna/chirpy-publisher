@@ -1,0 +1,124 @@
+/* V3 — Retro Terminal — ChirpSpace */
+.chirpspace-top {
+    max-width: 1080px;
+    margin: 0.5rem auto 0;
+    padding: 0.5rem 0.75rem;
+    border: 1px solid var(--brand);
+    border-radius: 0;
+    background: var(--bg);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.6rem;
+}
+
+.chirpspace-top::before {
+    content: none;
+}
+
+.chirpspace-top h1 {
+    margin: 0.15rem 0;
+    color: var(--brand);
+    font-size: 1.1rem;
+}
+
+.chirpspace-shell {
+    max-width: 1080px;
+    margin: 0.5rem auto;
+}
+
+.chirpspace-feed {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.chirpspace-post {
+    border: 1px solid var(--border);
+    border-radius: 0;
+    background: var(--surface);
+    padding: 0.6rem;
+}
+
+.chirpspace-post:hover {
+    border-color: var(--brand);
+}
+
+.post-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.4rem;
+    margin-bottom: 0.4rem;
+}
+
+.post-date {
+    font-size: 0.78rem;
+    color: var(--muted);
+}
+
+.post-tags {
+    font-size: 0.72rem;
+    color: var(--muted);
+}
+
+.post-visibility {
+    font-size: 0.68rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    border: 1px solid var(--brand);
+    border-radius: 0;
+    padding: 0.08rem 0.35rem;
+    background: transparent;
+    color: var(--brand);
+}
+
+.hidden {
+    display: none;
+}
+
+.post-text {
+    white-space: pre-wrap;
+    margin: 0 0 0.5rem 0;
+}
+
+.post-photos,
+.post-videos {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 0.4rem;
+    margin-bottom: 0.5rem;
+}
+
+.post-photos img,
+.post-videos video {
+    width: 100%;
+    border-radius: 0;
+    border: 1px solid var(--border);
+}
+
+.post-link-card {
+    border: 1px solid var(--border);
+    border-radius: 0;
+    background: var(--bg);
+    padding: 0.4rem;
+    margin-bottom: 0.3rem;
+}
+
+.post-link-card a {
+    color: var(--brand);
+}
+
+.empty-state {
+    border: 1px dashed var(--brand);
+    border-radius: 0;
+    padding: 0.75rem;
+    background: var(--surface);
+    color: var(--muted);
+}
+
+@media (max-width: 760px) {
+    .chirpspace-top {
+        flex-direction: column;
+        align-items: stretch;
+    }
+}
