@@ -22,6 +22,7 @@ const presenceTopic = process.env.CHIRPY_PRESENCE_TOPIC || 'chirpy.users.v1';
 const publishTopic = process.env.CHIRPY_PUBSUB_TOPIC || 'chirpy.new-post';
 const presenceHeartbeatMs = Number.parseInt(process.env.CHIRPY_PRESENCE_HEARTBEAT_MS || '30000', 10);
 const presenceStaleMs = Number.parseInt(process.env.CHIRPY_PRESENCE_STALE_MS || '300000', 10);
+const OLLAMA_TIMEOUT_MS = Number.parseInt(process.env.CHIRPY_OLLAMA_TIMEOUT_MS || '7000', 10);
 const usersFile = path.join(runtimeRoot, 'users.json');
 const instanceFile = path.join(runtimeRoot, 'instance.json');
 
@@ -436,13 +437,17 @@ app.post('/stage', upload.array('media', 50), async (req, res) => {
       links.push(card);
     }
 
-    const semanticTags = await buildSemanticTags({
-      autoTagEnabled,
-      existingTags: tags,
-      text,
-      blocks,
-      links
-    });
+    const semanticTags = await withTimeout(
+      buildSemanticTags({
+        autoTagEnabled,
+        existingTags: tags,
+        text,
+        blocks,
+        links
+      }),
+      12000,
+      []
+    );
     const finalTags = normalizeTagList([...tags, ...semanticTags]).slice(0, 12);
 
     const createdAt = new Date().toISOString();
@@ -1314,6 +1319,25 @@ async function buildSemanticTags({ autoTagEnabled, existingTags, text, blocks, l
   return applyDisambiguationGuards(corpus, filtered);
 }
 
+async function fetchJsonWithTimeout(url, options, timeoutMs = OLLAMA_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), Math.max(1000, Number(timeoutMs) || OLLAMA_TIMEOUT_MS));
+  try {
+    const response = await fetch(url, { ...(options || {}), signal: controller.signal });
+    return response;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function withTimeout(taskPromise, timeoutMs, fallback) {
+  const limit = Math.max(500, Number(timeoutMs) || 0);
+  return await Promise.race([
+    Promise.resolve(taskPromise),
+    new Promise((resolve) => setTimeout(() => resolve(fallback), limit))
+  ]);
+}
+
 async function classifyPostSemanticRoute(corpus) {
   const text = String(corpus || '').trim();
   if (!text || text.length < 6) {
@@ -1340,7 +1364,7 @@ async function classifyPostSemanticRoute(corpus) {
   ].join('\n');
 
   try {
-    const response = await fetch(`${host}/api/generate`, {
+    const response = await fetchJsonWithTimeout(`${host}/api/generate`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -1350,7 +1374,7 @@ async function classifyPostSemanticRoute(corpus) {
         format: 'json',
         options: { temperature: 0.1 }
       })
-    });
+    }, OLLAMA_TIMEOUT_MS);
     if (!response.ok) {
       return { bucket: 'general', audience: 'general', subtopics: [], entities: [] };
     }
@@ -1421,7 +1445,7 @@ async function inferNicheDepthTags(corpus, bucket, audience) {
   ].join('\n');
 
   try {
-    const response = await fetch(`${host}/api/generate`, {
+    const response = await fetchJsonWithTimeout(`${host}/api/generate`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -1431,7 +1455,7 @@ async function inferNicheDepthTags(corpus, bucket, audience) {
         format: 'json',
         options: { temperature: 0.15 }
       })
-    });
+    }, OLLAMA_TIMEOUT_MS);
     if (!response.ok) return [];
     const data = await response.json();
     const parsed = parseLooseJsonObject(String(data?.response || '').trim());
@@ -1642,7 +1666,7 @@ async function analyzePostSemantics(corpus) {
   ].join('\n');
 
   try {
-    const response = await fetch(`${host}/api/generate`, {
+    const response = await fetchJsonWithTimeout(`${host}/api/generate`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -1652,7 +1676,7 @@ async function analyzePostSemantics(corpus) {
         format: 'json',
         options: { temperature: 0.1 }
       })
-    });
+    }, OLLAMA_TIMEOUT_MS);
     if (!response.ok) {
       return { usedModel: false, buckets: [], subtopics: [], entities: [] };
     }
@@ -1745,7 +1769,7 @@ async function inferAudienceTagsWithOllama(text, bucketTags, allowedAudiences) {
   ].join('\n');
 
   try {
-    const response = await fetch(`${host}/api/generate`, {
+    const response = await fetchJsonWithTimeout(`${host}/api/generate`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -1755,7 +1779,7 @@ async function inferAudienceTagsWithOllama(text, bucketTags, allowedAudiences) {
         format: 'json',
         options: { temperature: 0.1 }
       })
-    });
+    }, OLLAMA_TIMEOUT_MS);
     if (!response.ok) return [];
     const data = await response.json();
     const raw = String(data?.response || '').trim();
@@ -1894,14 +1918,14 @@ async function getEmbeddingVector(input) {
   const host = String(process.env.OLLAMA_HOST || 'http://127.0.0.1:11434').trim();
   const model = String(process.env.OLLAMA_EMBED_MODEL || 'nomic-embed-text').trim();
   try {
-    const response = await fetch(`${host}/api/embeddings`, {
+    const response = await fetchJsonWithTimeout(`${host}/api/embeddings`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         model,
         prompt: String(input || '').slice(0, 3200)
       })
-    });
+    }, OLLAMA_TIMEOUT_MS);
     if (!response.ok) return [];
     const data = await response.json();
     return Array.isArray(data?.embedding) ? data.embedding : [];
@@ -1955,7 +1979,7 @@ async function generateTagsWithOllama(corpus, existingTags) {
   ].join('\n');
 
   try {
-    const response = await fetch(`${host}/api/generate`, {
+    const response = await fetchJsonWithTimeout(`${host}/api/generate`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -1964,7 +1988,7 @@ async function generateTagsWithOllama(corpus, existingTags) {
         stream: false,
         options: { temperature: 0.2 }
       })
-    });
+    }, OLLAMA_TIMEOUT_MS);
     if (!response.ok) return [];
     const data = await response.json();
     const raw = String(data?.response || '').trim();
@@ -2207,7 +2231,7 @@ async function inferBucketsWithOllama(text, allowedBuckets) {
   ].join('\n');
 
   try {
-    const response = await fetch(`${host}/api/generate`, {
+    const response = await fetchJsonWithTimeout(`${host}/api/generate`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -2216,7 +2240,7 @@ async function inferBucketsWithOllama(text, allowedBuckets) {
         stream: false,
         options: { temperature: 0.1 }
       })
-    });
+    }, OLLAMA_TIMEOUT_MS);
     if (!response.ok) return [];
     const data = await response.json();
     const raw = String(data?.response || '').trim();
