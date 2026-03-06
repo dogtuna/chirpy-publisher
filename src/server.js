@@ -1026,20 +1026,25 @@ async function collectPublicTagsForDid(did) {
   try {
     const entries = await fs.readdir(stageRoot, { withFileTypes: true });
     const directories = entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
-    const seenExact = new Set();
-    const seenAny = new Set();
+    const records = [];
     for (const stageId of directories) {
       const record = await loadChirpSpacePost(stageId);
       if (!record) continue;
       if (record.visibility !== 'public') continue;
+      records.push(record);
+    }
+    records.sort((a, b) => String(b?.createdAt || '').localeCompare(String(a?.createdAt || '')));
+
+    const seenExact = new Set();
+    const seenAny = new Set();
+    for (const record of records) {
       const tags = Array.isArray(record.tags) ? record.tags : [];
+      const isExact = targetDid && String(record.userDid || '').trim() === targetDid;
       for (const tag of tags) {
         const clean = String(tag || '').trim().toLowerCase();
         if (!clean) continue;
+        if (isExact) seenExact.add(clean);
         seenAny.add(clean);
-        if (targetDid && String(record.userDid || '').trim() === targetDid) {
-          seenExact.add(clean);
-        }
       }
       if (seenAny.size >= 16 && (!targetDid || seenExact.size >= 8)) break;
     }

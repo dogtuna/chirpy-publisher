@@ -307,7 +307,10 @@ async function loadRadar() {
     state.viewerPublicTags = normalizeTagList([...localPostTags, ...localPresenceTags]).slice(0, 48);
     const candidates = users.map((user) => {
       const announcedTags = Array.isArray(user.tags) ? user.tags : [];
-      const rawTags = tagsByDid.get(user.profileDid) || announcedTags;
+      const fromLocalHistory = tagsByDid.get(user.profileDid) || [];
+      const rawTags = user.source === "self"
+        ? (fromLocalHistory.length ? fromLocalHistory : announcedTags)
+        : (announcedTags.length ? announcedTags : fromLocalHistory);
       const tags = prioritizeTagsByAffinity(rawTags, state.viewerPublicTags);
       return {
         id: user.id,
