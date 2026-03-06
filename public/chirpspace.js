@@ -233,10 +233,28 @@ async function loadChirpSpace() {
   try {
     const chirper = selectedChirper();
     let resp;
+    let data;
     if (chirper && chirper.httpBase && chirper.source !== "self") {
       const params = new URLSearchParams({ limit: "100", base: chirper.httpBase });
       if (chirper.did) params.set("authorDid", chirper.did);
       resp = await fetch(`/api/chirpspace/remote?${params.toString()}`);
+      data = await resp.json();
+      if ((!resp.ok || !data.ok) && chirper.did) {
+        throw new Error(data.error || "ChirpSpace load failed");
+      }
+      let loaded = Array.isArray(data?.posts) ? data.posts : [];
+      if (chirper.did && loaded.length === 0) {
+        const retry = new URLSearchParams({ limit: "100", base: chirper.httpBase });
+        const retryResp = await fetch(`/api/chirpspace/remote?${retry.toString()}`);
+        const retryData = await retryResp.json();
+        if (retryResp.ok && retryData?.ok) {
+          loaded = Array.isArray(retryData.posts) ? retryData.posts : [];
+        }
+      }
+      state.posts = applyTagFilter(loaded, state.selectedTag);
+      updateIdentityText();
+      await renderPosts(state.posts);
+      return;
     } else {
       const params = new URLSearchParams({ limit: "100" });
       const authorDid = chirper?.did || author?.userDid || "";
@@ -244,13 +262,14 @@ async function loadChirpSpace() {
       if (viewer?.userDid) params.set("viewerDid", viewer.userDid);
       params.set("viewerRole", viewer?.role === "child" ? "child" : "adult");
       resp = await fetch(`/api/chirpspace?${params.toString()}`);
+      data = await resp.json();
+      if (!resp.ok || !data.ok) throw new Error(data.error || "ChirpSpace load failed");
+      const loaded = Array.isArray(data.posts) ? data.posts : [];
+      state.posts = applyTagFilter(loaded, state.selectedTag);
+      updateIdentityText();
+      await renderPosts(state.posts);
+      return;
     }
-    const data = await resp.json();
-    if (!resp.ok || !data.ok) throw new Error(data.error || "ChirpSpace load failed");
-    const loaded = Array.isArray(data.posts) ? data.posts : [];
-    state.posts = applyTagFilter(loaded, state.selectedTag);
-    updateIdentityText();
-    await renderPosts(state.posts);
   } catch (error) {
     state.posts = [];
     els.chirpspaceFeed.innerHTML = `<div class="empty-state">Failed to load ChirpSpace: ${escapeHtml(error.message)}</div>`;
