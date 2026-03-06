@@ -290,10 +290,21 @@ async function loadRadar() {
     if (!postsResp.ok || !postsData.ok) throw new Error(postsData.error || "posts load failed");
     const users = Array.isArray(usersData.users) ? usersData.users : [];
     const tagsByDid = aggregateTagsByDid(Array.isArray(postsData.posts) ? postsData.posts : []);
+    const localDids = state.profiles
+      .map((p) => String(p?.userDid || "").trim())
+      .filter(Boolean);
     const viewer = activeViewer();
-    const viewerTagsFromPosts = viewer?.userDid ? tagsByDid.get(viewer.userDid) || [] : [];
-    const viewerTagsFromPresence = users.find((u) => String(u.profileDid || "").trim() === String(viewer?.userDid || "").trim())?.tags || [];
-    state.viewerPublicTags = normalizeTagList([...(viewerTagsFromPosts || []), ...(viewerTagsFromPresence || [])]).slice(0, 24);
+    if (viewer?.userDid && !localDids.includes(String(viewer.userDid).trim())) {
+      localDids.push(String(viewer.userDid).trim());
+    }
+    const localPostTags = [];
+    for (const did of localDids) {
+      localPostTags.push(...(tagsByDid.get(did) || []));
+    }
+    const localPresenceTags = users
+      .filter((u) => localDids.includes(String(u.profileDid || "").trim()))
+      .flatMap((u) => (Array.isArray(u.tags) ? u.tags : []));
+    state.viewerPublicTags = normalizeTagList([...localPostTags, ...localPresenceTags]).slice(0, 48);
     const candidates = users.map((user) => {
       const announcedTags = Array.isArray(user.tags) ? user.tags : [];
       const rawTags = tagsByDid.get(user.profileDid) || announcedTags;
@@ -325,14 +336,17 @@ async function loadRadar() {
 function prioritizeTagsByAffinity(tags, affinityTags) {
   const list = normalizeTagList(tags || []);
   const affinity = new Set(normalizeTagList(affinityTags || []));
-  if (!list.length || !affinity.size) return list;
+  if (!list.length) return list;
   const overlap = [];
   const rest = [];
   for (const tag of list) {
-    if (affinity.has(tag)) overlap.push(tag);
+    if (tag === "general") continue;
+    if (affinity.size && affinity.has(tag)) overlap.push(tag);
     else rest.push(tag);
   }
-  return [...overlap, ...rest];
+  const out = [...overlap, ...rest];
+  if (list.includes("general")) out.push("general");
+  return out;
 }
 
 function normalizeTagList(values) {
