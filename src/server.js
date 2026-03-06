@@ -99,6 +99,7 @@ const protocolSchemas = {
       name: { type: 'string', minLength: 3, maxLength: 40 },
       profileDid: { type: 'string' },
       profileIpnsKey: { type: 'string' },
+      httpBase: { type: 'string' },
       publicTags: { type: 'array', items: { type: 'string' } },
       version: { type: 'string' },
       timestamp: { type: 'string', format: 'date-time' }
@@ -597,6 +598,35 @@ app.get('/api/chirpspace', async (req, res) => {
   }
 });
 
+app.get('/api/chirpspace/remote', async (req, res) => {
+  try {
+    const base = normalizeHttpBase(String(req.query.base || ''));
+    const authorDid = String(req.query.authorDid || '').trim();
+    const limit = Math.min(Math.max(Number.parseInt(String(req.query.limit || '100'), 10) || 100, 1), 300);
+    if (!base) {
+      res.status(400).json({ ok: false, error: 'invalid remote base' });
+      return;
+    }
+    const target = new URL('/api/chirpspace', base);
+    target.searchParams.set('limit', String(limit));
+    if (authorDid) target.searchParams.set('authorDid', authorDid);
+    const remoteResp = await fetchJsonWithTimeout(target.toString(), { method: 'GET' }, Math.max(1500, OLLAMA_TIMEOUT_MS));
+    if (!remoteResp.ok) {
+      res.status(502).json({ ok: false, error: `remote chirpspace failed (${remoteResp.status})` });
+      return;
+    }
+    const data = await remoteResp.json();
+    const posts = Array.isArray(data?.posts) ? data.posts : [];
+    const filtered = posts
+      .filter((post) => String(post?.visibility || 'public') === 'public')
+      .filter((post) => !authorDid || String(post?.userDid || '').trim() === authorDid)
+      .slice(0, limit);
+    res.json({ ok: true, base, posts: filtered });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message || 'remote chirpspace failed' });
+  }
+});
+
 app.post('/api/chirpspace/:stageId/make-public', async (req, res) => {
   const stageId = safeStageId(req.params.stageId);
   if (!stageId) {
@@ -723,6 +753,7 @@ app.get('/api/presence/self', (_req, res) => {
         name: presenceState.nodeName || '',
         profileDid: presenceState.profileDid || '',
         profileIpnsKey: presenceState.profileIpnsKey || '',
+        httpBase: buildLocalHttpBase(),
         publicTags: [],
         version: '1.0.0',
         timestamp: new Date().toISOString()
@@ -945,6 +976,7 @@ function handlePresencePubsubLine(line) {
     name: payload.name ? String(payload.name) : '',
     profileDid: payload.profileDid ? String(payload.profileDid) : '',
     profileIpnsKey: payload.profileIpnsKey ? String(payload.profileIpnsKey) : '',
+    httpBase: payload.httpBase ? String(payload.httpBase) : '',
     publicTags: Array.isArray(payload.publicTags) ? payload.publicTags : [],
     source: 'pubsub',
     timestamp: payload.timestamp
@@ -982,6 +1014,7 @@ async function buildPresencePayload() {
     name: presenceState.nodeName,
     profileDid: presenceState.profileDid || '',
     profileIpnsKey: presenceState.profileIpnsKey || '',
+    httpBase: buildLocalHttpBase(),
     publicTags,
     version: '1.0.0',
     timestamp: new Date().toISOString()
@@ -1033,17 +1066,19 @@ function startLanPresence() {
   presenceState.lanSocket = socket;
 
   socket.on('error', () => null);
-  socket.on('message', (msg) => {
+  socket.on('message', (msg, rinfo) => {
     const payload = safeJsonParse(String(msg || ''));
     const validation = validateProtocolPayload('chirpy.presence.v1', payload);
     if (!validation.valid) return;
     if (String(payload.id || '') === String(presenceState.instanceId || '')) return;
+    const rinfoBase = rinfo?.address ? `http://${String(rinfo.address).trim()}:${PORT}` : '';
     recordUser({
       id: String(payload.id),
       peerId: payload.peerId ? String(payload.peerId) : '',
       name: payload.name ? String(payload.name) : '',
       profileDid: payload.profileDid ? String(payload.profileDid) : '',
       profileIpnsKey: payload.profileIpnsKey ? String(payload.profileIpnsKey) : '',
+      httpBase: payload.httpBase ? String(payload.httpBase) : rinfoBase,
       publicTags: Array.isArray(payload.publicTags) ? payload.publicTags : [],
       source: 'lan',
       timestamp: payload.timestamp
@@ -1111,6 +1146,35 @@ function collectLanHttpCandidates() {
   return Array.from(candidates);
 }
 
+function normalizeHttpBase(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return '';
+    if (!url.hostname) return '';
+    url.pathname = '';
+    url.search = '';
+    url.hash = '';
+    return url.toString().replace(/\/$/, '');
+  } catch (_error) {
+    return '';
+  }
+}
+
+function buildLocalHttpBase() {
+  const interfaces = os.networkInterfaces();
+  for (const rows of Object.values(interfaces)) {
+    for (const row of rows || []) {
+      if (!row || row.internal || row.family !== 'IPv4') continue;
+      const ip = String(row.address || '').trim();
+      if (!ip) continue;
+      return `http://${ip}:${PORT}`;
+    }
+  }
+  return `http://127.0.0.1:${PORT}`;
+}
+
 async function probeLanHttpPeer(host) {
   try {
     const response = await fetchJsonWithTimeout(`http://${host}:${PORT}/api/presence/self`, { method: 'GET' }, LAN_SCAN_TIMEOUT_MS);
@@ -1126,6 +1190,7 @@ async function probeLanHttpPeer(host) {
       name: payload.name ? String(payload.name) : '',
       profileDid: payload.profileDid ? String(payload.profileDid) : '',
       profileIpnsKey: payload.profileIpnsKey ? String(payload.profileIpnsKey) : '',
+      httpBase: payload.httpBase ? String(payload.httpBase) : `http://${host}:${PORT}`,
       publicTags: Array.isArray(payload.publicTags) ? payload.publicTags : [],
       source: 'lan-http',
       timestamp: payload.timestamp
@@ -1135,18 +1200,20 @@ async function probeLanHttpPeer(host) {
   }
 }
 
-function recordUser({ id, peerId, name, profileDid, profileIpnsKey, publicTags, source, timestamp }) {
+function recordUser({ id, peerId, name, profileDid, profileIpnsKey, httpBase, publicTags, source, timestamp }) {
   const safeId = String(id || '').trim();
   if (!safeId) return;
 
   const nowIso = toIsoTimestamp(timestamp);
   const existing = presenceState.usersById.get(safeId) || {};
+  const base = normalizeHttpBase(String(httpBase || existing.httpBase || ''));
   const next = {
     id: safeId,
     peerId: String(peerId || existing.peerId || '').trim(),
     name: String(name || existing.name || '').trim(),
     profileDid: String(profileDid || existing.profileDid || '').trim(),
     profileIpnsKey: String(profileIpnsKey || existing.profileIpnsKey || '').trim(),
+    httpBase: base,
     publicTags: normalizeTagList(Array.isArray(publicTags) ? publicTags : existing.publicTags || []).slice(0, 8),
     source: String(source || existing.source || 'pubsub'),
     lastActivity: nowIso
@@ -1175,6 +1242,7 @@ function getOrderedUsers() {
         name: user.name || '',
         profileDid: user.profileDid || '',
         profileIpnsKey: user.profileIpnsKey || '',
+        httpBase: normalizeHttpBase(user.httpBase || ''),
         tags: normalizeTagList(user.publicTags || []).slice(0, 8),
         source: user.source || 'pubsub',
         lastActivity: user.lastActivity || null,
@@ -1195,6 +1263,7 @@ async function hydrateUsers() {
       name: String(user.name || ''),
       profileDid: String(user.profileDid || ''),
       profileIpnsKey: String(user.profileIpnsKey || ''),
+      httpBase: normalizeHttpBase(user.httpBase || ''),
       publicTags: normalizeTagList(user.tags || user.publicTags || []).slice(0, 8),
       source: String(user.source || 'pubsub'),
       lastActivity: String(user.lastActivity || '')

@@ -25,7 +25,10 @@ const state = {
   authorProfileId: "",
   posts: [],
   desktopProfile: null,
-  desktopStatus: null
+  desktopStatus: null,
+  radarCandidates: [],
+  selectedChirperId: "",
+  selectedTag: ""
 };
 
 boot();
@@ -124,7 +127,10 @@ function updateIdentityText() {
     els.chirpspaceIdentity.textContent = "No identity profiles found. Create them in Publisher first.";
     return;
   }
-  els.chirpspaceIdentity.textContent = `Viewing as ${viewer.name} (${viewer.role || "adult"}) | Feed: ${author?.name || "unknown"}`;
+  const chirper = selectedChirper();
+  const topic = state.selectedTag ? ` | Topic: #${state.selectedTag}` : "";
+  const feedLabel = chirper ? `Chirper ${chirper.name}` : `Feed: ${author?.name || "unknown"}`;
+  els.chirpspaceIdentity.textContent = `Viewing as ${viewer.name} (${viewer.role || "adult"}) | ${feedLabel}${topic}`;
 }
 
 async function hydrateDesktopContext() {
@@ -225,14 +231,25 @@ async function loadChirpSpace() {
   const viewer = activeViewer();
   const author = activeAuthor();
   try {
-    const params = new URLSearchParams({ limit: "100" });
-    if (author?.userDid) params.set("authorDid", author.userDid);
-    if (viewer?.userDid) params.set("viewerDid", viewer.userDid);
-    params.set("viewerRole", viewer?.role === "child" ? "child" : "adult");
-    const resp = await fetch(`/api/chirpspace?${params.toString()}`);
+    const chirper = selectedChirper();
+    let resp;
+    if (chirper && chirper.httpBase && chirper.source !== "self") {
+      const params = new URLSearchParams({ limit: "100", base: chirper.httpBase });
+      if (chirper.did) params.set("authorDid", chirper.did);
+      resp = await fetch(`/api/chirpspace/remote?${params.toString()}`);
+    } else {
+      const params = new URLSearchParams({ limit: "100" });
+      const authorDid = chirper?.did || author?.userDid || "";
+      if (authorDid) params.set("authorDid", authorDid);
+      if (viewer?.userDid) params.set("viewerDid", viewer.userDid);
+      params.set("viewerRole", viewer?.role === "child" ? "child" : "adult");
+      resp = await fetch(`/api/chirpspace?${params.toString()}`);
+    }
     const data = await resp.json();
     if (!resp.ok || !data.ok) throw new Error(data.error || "ChirpSpace load failed");
-    state.posts = Array.isArray(data.posts) ? data.posts : [];
+    const loaded = Array.isArray(data.posts) ? data.posts : [];
+    state.posts = applyTagFilter(loaded, state.selectedTag);
+    updateIdentityText();
     await renderPosts(state.posts);
   } catch (error) {
     state.posts = [];
@@ -260,11 +277,19 @@ async function loadRadar() {
         id: user.id,
         name: user.name || "unnamed",
         did: user.profileDid || "",
+        httpBase: user.httpBase || "",
+        source: user.source || "",
         tags,
         active: Boolean(user.active),
         lastActivity: user.lastActivity || ""
       };
     });
+    state.radarCandidates = candidates;
+    if (state.selectedChirperId && !state.radarCandidates.some((x) => x.id === state.selectedChirperId)) {
+      state.selectedChirperId = "";
+      state.selectedTag = "";
+      updateIdentityText();
+    }
     const matchById = await computeMatches(candidates);
     renderRadar(candidates, matchById);
   } catch (error) {
@@ -435,21 +460,51 @@ function renderRadar(candidates, matchById) {
     .forEach((candidate) => {
       const item = document.createElement("article");
       const match = matchById.get(candidate.id);
-      item.className = `radar-item${match ? " match" : ""}`;
+      item.className = `radar-item${match ? " match" : ""}${state.selectedChirperId === candidate.id ? " selected" : ""}`;
       const status = candidate.active ? "active" : "idle";
       const tagsHtml = (candidate.tags || [])
         .slice(0, 6)
-        .map((tag) => `<span class="pill-mini">${escapeHtml(tag)}</span>`)
+        .map((tag) => `<button class="pill-mini pill-action" type="button" data-chirper-id="${escapeHtml(candidate.id)}" data-tag="${escapeHtml(tag)}">${escapeHtml(tag)}</button>`)
         .join("");
       const score = match ? ` | match ${Math.round((match.score || 0) * 100)}% (${match.reason})` : "";
       item.innerHTML = `
-        <strong>${escapeHtml(candidate.name)}</strong>
+        <strong><button class="chirper-link" type="button" data-chirper-id="${escapeHtml(candidate.id)}">${escapeHtml(candidate.name)}</button></strong>
         <div class="sub small">${status}${score}</div>
         <div class="sub small">${escapeHtml(candidate.did || "no DID announced")}</div>
         <div>${tagsHtml || '<span class="sub small">no public tags yet</span>'}</div>
       `;
+      const nameBtn = item.querySelector(".chirper-link");
+      nameBtn?.addEventListener("click", async () => {
+        const same = state.selectedChirperId === candidate.id;
+        state.selectedChirperId = same ? "" : candidate.id;
+        state.selectedTag = "";
+        updateIdentityText();
+        renderRadar(candidates, matchById);
+        await loadChirpSpace();
+      });
+      item.querySelectorAll(".pill-action").forEach((button) => {
+        button.addEventListener("click", async () => {
+          state.selectedChirperId = candidate.id;
+          const nextTag = String(button.getAttribute("data-tag") || "").trim().toLowerCase();
+          state.selectedTag = state.selectedTag === nextTag ? "" : nextTag;
+          updateIdentityText();
+          renderRadar(candidates, matchById);
+          await loadChirpSpace();
+        });
+      });
       els.radarList.appendChild(item);
     });
+}
+
+function selectedChirper() {
+  return state.radarCandidates.find((x) => x.id === state.selectedChirperId) || null;
+}
+
+function applyTagFilter(posts, selectedTag) {
+  const tag = String(selectedTag || "").trim().toLowerCase();
+  const list = Array.isArray(posts) ? posts : [];
+  if (!tag) return list;
+  return list.filter((post) => (Array.isArray(post?.tags) ? post.tags : []).some((t) => String(t || "").trim().toLowerCase() === tag));
 }
 
 async function renderPosts(posts) {
