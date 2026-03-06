@@ -581,6 +581,8 @@ function renderRadar(candidates, matchById) {
       });
       item.querySelectorAll(".pill-action").forEach((button) => {
         button.addEventListener("click", async (event) => {
+          event.preventDefault();
+          event.stopPropagation();
           const nextTag = String(button.getAttribute("data-tag") || "").trim().toLowerCase();
           openTagMenu(event, candidate, nextTag);
         });
@@ -594,6 +596,8 @@ function selectedChirper() {
 }
 
 function openTagMenu(event, candidate, tag) {
+  event.preventDefault();
+  event.stopPropagation();
   const menu = els.tagActionMenu;
   if (!menu) return;
   const target = event.currentTarget;
