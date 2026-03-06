@@ -207,6 +207,52 @@
     display: none !important;
 }
 
+.tag-menu {
+    position: fixed;
+    z-index: 10020;
+    min-width: 240px;
+    border: 1px solid var(--line);
+    background: #fff;
+    box-shadow: 0 12px 24px rgba(10, 12, 14, 0.18);
+    padding: 0.35rem;
+}
+
+.tag-menu.hidden {
+    display: none !important;
+}
+
+.tag-menu-group {
+    border-bottom: 1px solid var(--line);
+    padding: 0.2rem 0;
+}
+
+.tag-menu-group:last-child {
+    border-bottom: none;
+}
+
+.tag-menu-title {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    margin: 0.15rem 0.35rem 0.3rem;
+}
+
+.tag-menu-action {
+    display: block;
+    width: 100%;
+    text-align: left;
+    border: none;
+    background: transparent;
+    padding: 0.4rem 0.45rem;
+    font: inherit;
+    cursor: pointer;
+}
+
+.tag-menu-action:hover {
+    background: color-mix(in srgb, var(--brand) 12%, #ffffff);
+}
+
 .walkthrough-card {
     width: min(760px, 96vw);
     border: 1px solid var(--line);

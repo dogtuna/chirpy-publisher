@@ -16,7 +16,8 @@ const els = {
   walkthroughGate: document.getElementById("walkthroughGate"),
   walkthroughChecklist: document.getElementById("walkthroughChecklist"),
   refreshWalkthrough: document.getElementById("refreshWalkthrough"),
-  dismissWalkthrough: document.getElementById("dismissWalkthrough")
+  dismissWalkthrough: document.getElementById("dismissWalkthrough"),
+  tagActionMenu: document.getElementById("tagActionMenu")
 };
 
 const state = {
@@ -29,13 +30,18 @@ const state = {
   radarCandidates: [],
   selectedChirperId: "",
   selectedTag: "",
-  viewerPublicTags: []
+  viewerPublicTags: [],
+  feedScope: "default",
+  hiddenTopicsAll: [],
+  hiddenUserTopics: {},
+  tagMenuContext: null
 };
 
 boot();
 
 async function boot() {
   loadProfiles();
+  loadTopicFilters();
   bindControls();
   renderProfileSelectors();
   await hydrateDesktopContext();
@@ -92,6 +98,13 @@ function bindControls() {
       if (els.walkthroughGate) els.walkthroughGate.classList.add("hidden");
     });
   }
+  document.addEventListener("click", (event) => {
+    const menu = els.tagActionMenu;
+    if (!menu || menu.classList.contains("hidden")) return;
+    const target = event.target;
+    if (target instanceof Node && menu.contains(target)) return;
+    closeTagMenu();
+  });
 }
 
 function renderProfileSelectors() {
@@ -130,7 +143,11 @@ function updateIdentityText() {
   }
   const chirper = selectedChirper();
   const topic = state.selectedTag ? ` | Topic: #${state.selectedTag}` : "";
-  const feedLabel = chirper ? `Chirper ${chirper.name}` : `Feed: ${author?.name || "unknown"}`;
+  const feedLabel = state.feedScope === "all" && state.selectedTag
+    ? "All Chirpers"
+    : chirper
+      ? `Chirper ${chirper.name}`
+      : `Feed: ${author?.name || "unknown"}`;
   els.chirpspaceIdentity.textContent = `Viewing as ${viewer.name} (${viewer.role || "adult"}) | ${feedLabel}${topic}`;
 }
 
@@ -232,6 +249,15 @@ async function loadChirpSpace() {
   const viewer = activeViewer();
   const author = activeAuthor();
   try {
+    closeTagMenu();
+    if (state.feedScope === "all" && state.selectedTag) {
+      const loaded = await loadAllPublicPosts();
+      const filtered = applyVisibilityFilters(applyTagFilter(loaded, state.selectedTag));
+      state.posts = filtered;
+      updateIdentityText();
+      await renderPosts(state.posts);
+      return;
+    }
     const chirper = selectedChirper();
     let resp;
     let data;
@@ -252,7 +278,7 @@ async function loadChirpSpace() {
           loaded = Array.isArray(retryData.posts) ? retryData.posts : [];
         }
       }
-      state.posts = applyTagFilter(loaded, state.selectedTag);
+      state.posts = applyVisibilityFilters(applyTagFilter(loaded, state.selectedTag));
       updateIdentityText();
       await renderPosts(state.posts);
       return;
@@ -266,7 +292,7 @@ async function loadChirpSpace() {
       data = await resp.json();
       if (!resp.ok || !data.ok) throw new Error(data.error || "ChirpSpace load failed");
       const loaded = Array.isArray(data.posts) ? data.posts : [];
-      state.posts = applyTagFilter(loaded, state.selectedTag);
+      state.posts = applyVisibilityFilters(applyTagFilter(loaded, state.selectedTag));
       updateIdentityText();
       await renderPosts(state.posts);
       return;
@@ -311,13 +337,15 @@ async function loadRadar() {
       const rawTags = user.source === "self"
         ? (fromLocalHistory.length ? fromLocalHistory : announcedTags)
         : (announcedTags.length ? announcedTags : fromLocalHistory);
-      const tags = prioritizeTagsByAffinity(rawTags, state.viewerPublicTags);
+      const visibleTags = filterVisibleTags(rawTags, user.profileDid || user.id || "");
+      const tags = prioritizeTagsByAffinity(visibleTags, state.viewerPublicTags);
       return {
         id: user.id,
         name: user.name || "unnamed",
         did: user.profileDid || "",
         httpBase: user.httpBase || "",
         source: user.source || "",
+        key: String(user.profileDid || user.id || "").trim(),
         tags,
         active: Boolean(user.active),
         lastActivity: user.lastActivity || ""
@@ -546,18 +574,15 @@ function renderRadar(candidates, matchById) {
         const same = state.selectedChirperId === candidate.id;
         state.selectedChirperId = same ? "" : candidate.id;
         state.selectedTag = "";
+        state.feedScope = "default";
         updateIdentityText();
         renderRadar(candidates, matchById);
         await loadChirpSpace();
       });
       item.querySelectorAll(".pill-action").forEach((button) => {
-        button.addEventListener("click", async () => {
-          state.selectedChirperId = candidate.id;
+        button.addEventListener("click", async (event) => {
           const nextTag = String(button.getAttribute("data-tag") || "").trim().toLowerCase();
-          state.selectedTag = state.selectedTag === nextTag ? "" : nextTag;
-          updateIdentityText();
-          renderRadar(candidates, matchById);
-          await loadChirpSpace();
+          openTagMenu(event, candidate, nextTag);
         });
       });
       els.radarList.appendChild(item);
@@ -568,11 +593,185 @@ function selectedChirper() {
   return state.radarCandidates.find((x) => x.id === state.selectedChirperId) || null;
 }
 
+function openTagMenu(event, candidate, tag) {
+  const menu = els.tagActionMenu;
+  if (!menu) return;
+  const target = event.currentTarget;
+  if (!(target instanceof HTMLElement)) return;
+  const safeTag = String(tag || "").trim().toLowerCase();
+  if (!safeTag) return;
+  const userKey = String(candidate?.did || candidate?.id || "").trim();
+  state.tagMenuContext = { candidate, tag: safeTag, userKey };
+  menu.innerHTML = `
+    <div class="tag-menu-group">
+      <div class="tag-menu-title">View</div>
+      <button class="tag-menu-action" type="button" data-action="view-all">All posts on this topic</button>
+      <button class="tag-menu-action" type="button" data-action="view-user">This user's posts on this topic</button>
+    </div>
+    <div class="tag-menu-group">
+      <div class="tag-menu-title">Hide</div>
+      <button class="tag-menu-action" type="button" data-action="hide-all">All posts on this topic</button>
+      <button class="tag-menu-action" type="button" data-action="hide-user">This user's posts on this topic</button>
+    </div>
+  `;
+  const rect = target.getBoundingClientRect();
+  menu.style.left = `${Math.max(12, Math.round(rect.left))}px`;
+  menu.style.top = `${Math.round(rect.bottom + 8)}px`;
+  menu.classList.remove("hidden");
+  menu.setAttribute("aria-hidden", "false");
+  menu.querySelectorAll(".tag-menu-action").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const action = String(btn.getAttribute("data-action") || "").trim();
+      await handleTagMenuAction(action, state.tagMenuContext);
+      closeTagMenu();
+      await loadRadar();
+      await loadChirpSpace();
+    });
+  });
+}
+
+function closeTagMenu() {
+  const menu = els.tagActionMenu;
+  if (!menu) return;
+  menu.classList.add("hidden");
+  menu.setAttribute("aria-hidden", "true");
+  menu.innerHTML = "";
+  state.tagMenuContext = null;
+}
+
+async function handleTagMenuAction(action, context) {
+  const tag = String(context?.tag || "").trim().toLowerCase();
+  const candidate = context?.candidate || null;
+  const userKey = String(context?.userKey || "").trim();
+  if (!tag) return;
+  if (action === "view-all") {
+    state.selectedChirperId = "";
+    state.selectedTag = tag;
+    state.feedScope = "all";
+    updateIdentityText();
+    return;
+  }
+  if (action === "view-user") {
+    state.selectedChirperId = String(candidate?.id || "").trim();
+    state.selectedTag = tag;
+    state.feedScope = "default";
+    updateIdentityText();
+    return;
+  }
+  if (action === "hide-all") {
+    const next = new Set(normalizeTagList(state.hiddenTopicsAll || []));
+    next.add(tag);
+    state.hiddenTopicsAll = Array.from(next);
+    persistTopicFilters();
+    if (state.selectedTag === tag) {
+      state.selectedTag = "";
+      state.feedScope = "default";
+    }
+    updateIdentityText();
+    return;
+  }
+  if (action === "hide-user") {
+    if (!userKey) return;
+    const map = { ...(state.hiddenUserTopics || {}) };
+    const existing = new Set(normalizeTagList(map[userKey] || []));
+    existing.add(tag);
+    map[userKey] = Array.from(existing);
+    state.hiddenUserTopics = map;
+    persistTopicFilters();
+    updateIdentityText();
+  }
+}
+
 function applyTagFilter(posts, selectedTag) {
   const tag = String(selectedTag || "").trim().toLowerCase();
   const list = Array.isArray(posts) ? posts : [];
   if (!tag) return list;
   return list.filter((post) => (Array.isArray(post?.tags) ? post.tags : []).some((t) => String(t || "").trim().toLowerCase() === tag));
+}
+
+function filterVisibleTags(tags, userKey) {
+  const allHidden = new Set(normalizeTagList(state.hiddenTopicsAll || []));
+  const perUser = new Set(normalizeTagList((state.hiddenUserTopics || {})[String(userKey || "").trim()] || []));
+  return normalizeTagList(tags || []).filter((tag) => !allHidden.has(tag) && !perUser.has(tag));
+}
+
+function applyVisibilityFilters(posts) {
+  const list = Array.isArray(posts) ? posts : [];
+  const allHidden = new Set(normalizeTagList(state.hiddenTopicsAll || []));
+  const perUserMap = state.hiddenUserTopics || {};
+  return list.filter((post) => {
+    const tags = normalizeTagList(Array.isArray(post?.tags) ? post.tags : []);
+    if (tags.some((t) => allHidden.has(t))) return false;
+    const userKey = String(post?.userDid || "").trim();
+    if (!userKey) return true;
+    const hiddenForUser = new Set(normalizeTagList(perUserMap[userKey] || []));
+    if (!hiddenForUser.size) return true;
+    return !tags.some((t) => hiddenForUser.has(t));
+  });
+}
+
+async function loadAllPublicPosts() {
+  const viewer = activeViewer();
+  const localParams = new URLSearchParams({ limit: "250" });
+  if (viewer?.userDid) localParams.set("viewerDid", viewer.userDid);
+  localParams.set("viewerRole", viewer?.role === "child" ? "child" : "adult");
+  const localResp = await fetch(`/api/chirpspace?${localParams.toString()}`);
+  const localData = await localResp.json();
+  if (!localResp.ok || !localData?.ok) {
+    throw new Error(localData?.error || "local ChirpSpace load failed");
+  }
+  const merged = [];
+  const localPosts = Array.isArray(localData.posts) ? localData.posts : [];
+  merged.push(...localPosts);
+
+  const bases = Array.from(new Set(
+    state.radarCandidates
+      .filter((x) => x.source !== "self")
+      .map((x) => String(x.httpBase || "").trim())
+      .filter(Boolean)
+  ));
+  const remoteResults = await Promise.all(
+    bases.map(async (base) => {
+      try {
+        const params = new URLSearchParams({ base, limit: "160" });
+        const resp = await fetch(`/api/chirpspace/remote?${params.toString()}`);
+        const data = await resp.json();
+        if (!resp.ok || !data?.ok) return [];
+        return Array.isArray(data.posts) ? data.posts : [];
+      } catch (_error) {
+        return [];
+      }
+    })
+  );
+  remoteResults.forEach((rows) => merged.push(...rows));
+  return merged.sort((a, b) => String(b?.createdAt || "").localeCompare(String(a?.createdAt || "")));
+}
+
+function loadTopicFilters() {
+  try {
+    const raw = localStorage.getItem("chirpyTopicFilters");
+    const parsed = raw ? JSON.parse(raw) : {};
+    state.hiddenTopicsAll = normalizeTagList(parsed?.hiddenTopicsAll || []);
+    state.hiddenUserTopics = parsed?.hiddenUserTopics && typeof parsed.hiddenUserTopics === "object"
+      ? Object.fromEntries(
+          Object.entries(parsed.hiddenUserTopics).map(([key, value]) => [String(key), normalizeTagList(value || [])])
+        )
+      : {};
+  } catch (_error) {
+    state.hiddenTopicsAll = [];
+    state.hiddenUserTopics = {};
+  }
+}
+
+function persistTopicFilters() {
+  try {
+    localStorage.setItem("chirpyTopicFilters", JSON.stringify({
+      hiddenTopicsAll: normalizeTagList(state.hiddenTopicsAll || []),
+      hiddenUserTopics: state.hiddenUserTopics || {}
+    }));
+  } catch (_error) {
+    // ignore
+  }
 }
 
 async function renderPosts(posts) {
