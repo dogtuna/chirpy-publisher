@@ -54,6 +54,32 @@
           </div>
         </details>
         <details>
+          <summary class="sub small">Preferences Manager</summary>
+          <p class="sub small">Manage hidden topics and your shared topic bank for smarter discovery and tagging.</p>
+          <label class="field">
+            <span>Search/Add Topic Preference</span>
+            <input id="prefSearch" type="text" list="prefTopicOptions" placeholder="baseball, gardening, texas rangers..." />
+          </label>
+          <datalist id="prefTopicOptions"></datalist>
+          <div class="row actions">
+            <button id="addPrefTopic" class="btn ghost small" type="button">Add To Topic Bank</button>
+            <button id="refreshPreferences" class="btn ghost small" type="button">Refresh</button>
+            <span id="prefStatus" class="sub small"></span>
+          </div>
+          <div class="prefs-section">
+            <strong class="sub small">Hidden Topics (Global)</strong>
+            <div id="hiddenTopicsAllList" class="prefs-list"></div>
+          </div>
+          <div class="prefs-section">
+            <strong class="sub small">Hidden Topics (Per User)</strong>
+            <div id="hiddenTopicsUserList" class="prefs-list"></div>
+          </div>
+          <div class="prefs-section">
+            <strong class="sub small">Topic Bank</strong>
+            <div id="topicBankList" class="prefs-list"></div>
+          </div>
+        </details>
+        <details>
           <summary class="sub small">Advanced Identifiers</summary>
           <div class="onboarding">
             <div class="row between"><span>DID</span><span id="didStatus" class="status idle">CHECKING</span><button

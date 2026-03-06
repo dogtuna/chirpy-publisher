@@ -42,6 +42,14 @@ const els = {
   desktopProfileStatus: document.getElementById("desktopProfileStatus"),
   desktopEngineStatus: document.getElementById("desktopEngineStatus"),
   desktopModelStatus: document.getElementById("desktopModelStatus"),
+  prefSearch: document.getElementById("prefSearch"),
+  prefTopicOptions: document.getElementById("prefTopicOptions"),
+  addPrefTopic: document.getElementById("addPrefTopic"),
+  refreshPreferences: document.getElementById("refreshPreferences"),
+  prefStatus: document.getElementById("prefStatus"),
+  hiddenTopicsAllList: document.getElementById("hiddenTopicsAllList"),
+  hiddenTopicsUserList: document.getElementById("hiddenTopicsUserList"),
+  topicBankList: document.getElementById("topicBankList"),
   toastStack: document.getElementById("toastStack"),
   userDid: document.getElementById("userDid"),
   ipnsKey: document.getElementById("ipnsKey"),
@@ -91,7 +99,13 @@ const state = {
   desktopProfile: null,
   desktopRuntimeStatus: null,
   lastModelPhase: "",
-  lastModelDetail: ""
+  lastModelDetail: "",
+  topicBank: [],
+  topicBankCustom: [],
+  hiddenTopicPrefs: {
+    hiddenTopicsAll: [],
+    hiddenUserTopics: {}
+  }
 };
 
 boot();
@@ -116,6 +130,7 @@ function boot() {
   loadHistory();
   loadUsers();
   scheduleSetupPrompt();
+  loadPreferenceManager();
   setInterval(loadUsers, 30000);
   setInterval(pollDesktopRuntimeStatus, 6000);
 }
@@ -183,6 +198,12 @@ function bindControls() {
   }
   if (els.runSetup) {
     els.runSetup.addEventListener("click", runFirstTimeSetup);
+  }
+  if (els.addPrefTopic) {
+    els.addPrefTopic.addEventListener("click", addPreferenceTopic);
+  }
+  if (els.refreshPreferences) {
+    els.refreshPreferences.addEventListener("click", loadPreferenceManager);
   }
   if (els.nodeNameInput) {
     els.nodeNameInput.addEventListener("input", onNodeNameInput);
@@ -253,10 +274,214 @@ function bindControls() {
 
 function toggleIdentityMenu() {
   els.identityMenu.classList.toggle("hidden");
+  if (!els.identityMenu.classList.contains("hidden")) {
+    loadPreferenceManager();
+  }
 }
 
 function closeIdentityMenu() {
   els.identityMenu.classList.add("hidden");
+}
+
+async function loadPreferenceManager() {
+  loadHiddenTopicPrefs();
+  await loadTopicBank();
+  renderPreferenceManager();
+}
+
+function loadHiddenTopicPrefs() {
+  try {
+    const raw = localStorage.getItem("chirpyTopicFilters");
+    const parsed = raw ? JSON.parse(raw) : {};
+    state.hiddenTopicPrefs = {
+      hiddenTopicsAll: normalizeLocalTags(parsed?.hiddenTopicsAll || []),
+      hiddenUserTopics: parsed?.hiddenUserTopics && typeof parsed.hiddenUserTopics === "object"
+        ? Object.fromEntries(
+            Object.entries(parsed.hiddenUserTopics).map(([key, value]) => [String(key), normalizeLocalTags(value || [])])
+          )
+        : {}
+    };
+  } catch (_error) {
+    state.hiddenTopicPrefs = { hiddenTopicsAll: [], hiddenUserTopics: {} };
+  }
+}
+
+function persistHiddenTopicPrefs() {
+  try {
+    localStorage.setItem("chirpyTopicFilters", JSON.stringify({
+      hiddenTopicsAll: normalizeLocalTags(state.hiddenTopicPrefs.hiddenTopicsAll || []),
+      hiddenUserTopics: state.hiddenTopicPrefs.hiddenUserTopics || {}
+    }));
+  } catch (_error) {
+    // ignore
+  }
+}
+
+async function loadTopicBank() {
+  try {
+    const resp = await fetch("/api/topic-bank");
+    const data = await resp.json();
+    if (!resp.ok || !data.ok) throw new Error(data.error || "topic bank load failed");
+    state.topicBank = normalizeLocalTags(data.topics || []);
+    state.topicBankCustom = normalizeLocalTags(data.customTopics || []);
+  } catch (error) {
+    if (els.prefStatus) els.prefStatus.textContent = `Could not load topic bank: ${error.message}`;
+    state.topicBank = [];
+    state.topicBankCustom = [];
+  }
+}
+
+async function saveTopicBankCustom(nextCustom) {
+  const clean = normalizeLocalTags(nextCustom || []);
+  const resp = await fetch("/api/topic-bank", {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ customTopics: clean })
+  });
+  const data = await resp.json();
+  if (!resp.ok || !data.ok) throw new Error(data.error || "topic bank save failed");
+  state.topicBank = normalizeLocalTags(data.topics || []);
+  state.topicBankCustom = normalizeLocalTags(data.customTopics || []);
+}
+
+function renderPreferenceManager() {
+  renderPreferenceOptions();
+  renderHiddenTopicLists();
+  renderTopicBankList();
+}
+
+function renderPreferenceOptions() {
+  if (!els.prefTopicOptions) return;
+  els.prefTopicOptions.innerHTML = "";
+  state.topicBank.slice(0, 300).forEach((topic) => {
+    const option = document.createElement("option");
+    option.value = topic;
+    els.prefTopicOptions.appendChild(option);
+  });
+}
+
+function renderHiddenTopicLists() {
+  if (els.hiddenTopicsAllList) {
+    els.hiddenTopicsAllList.innerHTML = "";
+    const all = normalizeLocalTags(state.hiddenTopicPrefs.hiddenTopicsAll || []);
+    if (!all.length) {
+      els.hiddenTopicsAllList.innerHTML = '<span class="sub small">No globally hidden topics.</span>';
+    } else {
+      all.forEach((topic) => {
+        const chip = buildPrefChip(`#${topic}`, "Unhide", () => {
+          state.hiddenTopicPrefs.hiddenTopicsAll = all.filter((x) => x !== topic);
+          persistHiddenTopicPrefs();
+          renderHiddenTopicLists();
+        });
+        els.hiddenTopicsAllList.appendChild(chip);
+      });
+    }
+  }
+
+  if (els.hiddenTopicsUserList) {
+    els.hiddenTopicsUserList.innerHTML = "";
+    const perUser = state.hiddenTopicPrefs.hiddenUserTopics || {};
+    const entries = Object.entries(perUser);
+    if (!entries.length) {
+      els.hiddenTopicsUserList.innerHTML = '<span class="sub small">No per-user topic hides.</span>';
+    } else {
+      entries.forEach(([userKey, topics]) => {
+        normalizeLocalTags(topics || []).forEach((topic) => {
+          const label = `${abbreviate(userKey, 12, 6)} · #${topic}`;
+          const chip = buildPrefChip(label, "Unhide", () => {
+            const next = normalizeLocalTags((state.hiddenTopicPrefs.hiddenUserTopics || {})[userKey] || []).filter((x) => x !== topic);
+            if (!next.length) delete state.hiddenTopicPrefs.hiddenUserTopics[userKey];
+            else state.hiddenTopicPrefs.hiddenUserTopics[userKey] = next;
+            persistHiddenTopicPrefs();
+            renderHiddenTopicLists();
+          });
+          els.hiddenTopicsUserList.appendChild(chip);
+        });
+      });
+    }
+  }
+}
+
+function renderTopicBankList() {
+  if (!els.topicBankList) return;
+  els.topicBankList.innerHTML = "";
+  const list = state.topicBank.slice(0, 200);
+  if (!list.length) {
+    els.topicBankList.innerHTML = '<span class="sub small">No topics yet.</span>';
+    return;
+  }
+  list.forEach((topic) => {
+    const isCustom = state.topicBankCustom.includes(topic);
+    const chip = buildPrefChip(`#${topic}${isCustom ? " (custom)" : ""}`, isCustom ? "Remove" : "", async () => {
+      if (!isCustom) return;
+      try {
+        const next = state.topicBankCustom.filter((x) => x !== topic);
+        await saveTopicBankCustom(next);
+        renderPreferenceManager();
+        if (els.prefStatus) els.prefStatus.textContent = `Removed "${topic}" from custom bank.`;
+      } catch (error) {
+        if (els.prefStatus) els.prefStatus.textContent = `Could not remove topic: ${error.message}`;
+      }
+    });
+    els.topicBankList.appendChild(chip);
+  });
+}
+
+function buildPrefChip(label, actionLabel, onAction) {
+  const chip = document.createElement("span");
+  chip.className = "pref-chip";
+  const text = document.createElement("span");
+  text.textContent = label;
+  chip.appendChild(text);
+  if (actionLabel) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = actionLabel;
+    btn.addEventListener("click", () => {
+      if (typeof onAction === "function") onAction();
+    });
+    chip.appendChild(btn);
+  }
+  return chip;
+}
+
+async function addPreferenceTopic() {
+  const topic = normalizeSingleTopic(els.prefSearch?.value || "");
+  if (!topic) {
+    if (els.prefStatus) els.prefStatus.textContent = "Enter a valid topic.";
+    return;
+  }
+  try {
+    const next = Array.from(new Set([...state.topicBankCustom, topic]));
+    await saveTopicBankCustom(next);
+    if (els.prefSearch) els.prefSearch.value = "";
+    renderPreferenceManager();
+    if (els.prefStatus) els.prefStatus.textContent = `Added "${topic}" to topic bank.`;
+  } catch (error) {
+    if (els.prefStatus) els.prefStatus.textContent = `Could not add topic: ${error.message}`;
+  }
+}
+
+function normalizeLocalTags(values) {
+  const raw = Array.isArray(values) ? values : String(values || "").split(",");
+  const out = [];
+  const seen = new Set();
+  for (const value of raw) {
+    const clean = normalizeSingleTopic(value);
+    if (!clean || seen.has(clean)) continue;
+    seen.add(clean);
+    out.push(clean);
+  }
+  return out;
+}
+
+function normalizeSingleTopic(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 40);
 }
 
 function applyFormat(command) {

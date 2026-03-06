@@ -251,6 +251,36 @@ details>summary::-webkit-details-marker {
     display: none;
 }
 
+.prefs-section {
+    margin-top: 0.6rem;
+}
+
+.prefs-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    margin-top: 0.35rem;
+}
+
+.pref-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    border: 1px solid var(--line);
+    background: #fff;
+    padding: 0.1rem 0.35rem;
+    font-size: 0.72rem;
+}
+
+.pref-chip button {
+    border: none;
+    background: transparent;
+    color: var(--brand);
+    cursor: pointer;
+    font-size: 0.72rem;
+    padding: 0;
+}
+
 /* ── Fields ────────────────────────────────────────── */
 .field {
     display: flex;

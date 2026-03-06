@@ -30,6 +30,7 @@ const LAN_SCAN_ENABLED = String(process.env.CHIRPY_LAN_SCAN_ENABLED || 'true') !
 const LAN_SCAN_TIMEOUT_MS = Number.parseInt(process.env.CHIRPY_LAN_SCAN_TIMEOUT_MS || '900', 10);
 const usersFile = path.join(runtimeRoot, 'users.json');
 const instanceFile = path.join(runtimeRoot, 'instance.json');
+const topicBankFile = path.join(runtimeRoot, 'topic-bank.json');
 
 const upload = multer({
   dest: uploadRoot,
@@ -740,6 +741,25 @@ app.get('/api/users', (_req, res) => {
   res.json({ ok: true, topic: presenceTopic, users: getOrderedUsers() });
 });
 
+app.get('/api/topic-bank', async (_req, res) => {
+  try {
+    const data = await getTopicBankData();
+    res.json({ ok: true, ...data });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message || 'failed to load topic bank' });
+  }
+});
+
+app.put('/api/topic-bank', async (req, res) => {
+  try {
+    const incoming = normalizeTagList(Array.isArray(req.body?.customTopics) ? req.body.customTopics : []);
+    const saved = await saveTopicBankCustomTopics(incoming);
+    res.json({ ok: true, ...saved });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message || 'failed to save topic bank' });
+  }
+});
+
 app.get('/api/presence/self', (_req, res) => {
   buildPresencePayload()
     .then((presence) => {
@@ -1050,6 +1070,54 @@ async function collectPublicTagsForDid(did) {
     }
     if (targetDid && seenExact.size > 0) return Array.from(seenExact).slice(0, 8);
     return Array.from(seenAny).slice(0, 8);
+  } catch (_error) {
+    return [];
+  }
+}
+
+async function getTopicBankData() {
+  const discoveredTopics = await collectDiscoveredTopicsFromPosts();
+  const stored = await readJsonFile(topicBankFile);
+  const customTopics = normalizeTagList(Array.isArray(stored?.customTopics) ? stored.customTopics : []);
+  const topics = normalizeTagList([...discoveredTopics, ...customTopics]).slice(0, 500);
+  return { topics, discoveredTopics, customTopics };
+}
+
+async function saveTopicBankCustomTopics(customTopics) {
+  const existing = await readJsonFile(topicBankFile);
+  const clean = normalizeTagList(customTopics || []).slice(0, 500);
+  const next = {
+    customTopics: clean,
+    createdAt: existing?.createdAt || new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+  await writeJsonFile(topicBankFile, next);
+  return getTopicBankData();
+}
+
+async function collectDiscoveredTopicsFromPosts() {
+  try {
+    const entries = await fs.readdir(stageRoot, { withFileTypes: true });
+    const directories = entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
+    const records = [];
+    for (const stageId of directories) {
+      const record = await loadChirpSpacePost(stageId);
+      if (!record) continue;
+      records.push(record);
+    }
+    records.sort((a, b) => String(b?.createdAt || '').localeCompare(String(a?.createdAt || '')));
+    const out = [];
+    const seen = new Set();
+    for (const record of records) {
+      const tags = normalizeTagList(Array.isArray(record?.tags) ? record.tags : []);
+      for (const tag of tags) {
+        if (seen.has(tag)) continue;
+        seen.add(tag);
+        out.push(tag);
+      }
+      if (out.length >= 500) break;
+    }
+    return out.slice(0, 500);
   } catch (_error) {
     return [];
   }
@@ -1626,7 +1694,9 @@ async function buildSemanticTags({ autoTagEnabled, existingTags, text, blocks, l
   if (!autoTagEnabled) return manual;
 
   const corpus = buildTagCorpus(text, blocks, links);
-  let semantic = await classifyPostSemanticRoute(corpus);
+  const topicBank = await getTopicBankData();
+  const knownTopics = normalizeTagList(topicBank?.topics || []).slice(0, 120);
+  let semantic = await classifyPostSemanticRoute(corpus, knownTopics);
   if (
     semantic.bucket === 'general'
     && semantic.audience === 'general'
@@ -1640,7 +1710,7 @@ async function buildSemanticTags({ autoTagEnabled, existingTags, text, blocks, l
       entities: normalizeTagList([...(semantic.entities || []), ...(fallback.entities || [])]).slice(0, 2)
     };
   }
-  const inferredNiches = await inferNicheDepthTags(corpus, semantic.bucket, semantic.audience);
+  const inferredNiches = await inferNicheDepthTags(corpus, semantic.bucket, semantic.audience, knownTopics);
   const bucketTag = normalizeTagList([semantic.bucket]).filter((x) => MODEL_BUCKETS.includes(x));
   const audienceTag = normalizeTagList([semantic.audience]).filter((x) => MODEL_AUDIENCES.includes(x));
   const subtopicCandidates = normalizeTagList([...(semantic.subtopics || []), ...inferredNiches])
@@ -1656,12 +1726,13 @@ async function buildSemanticTags({ autoTagEnabled, existingTags, text, blocks, l
     ...subtopics,
     ...entities
   ]).slice(0, 12);
+  const aligned = alignTagsToTopicBank(merged, knownTopics);
   if (!merged.length) {
     if (bucketTag.length) return bucketTag.slice(0, 2);
     if (audienceTag.length) return audienceTag.slice(0, 2);
     return ['general'];
   }
-  const compact = dropSubsumedTags(merged);
+  const compact = dropSubsumedTags(aligned.length ? aligned : merged);
   const filtered = compact.slice(0, 10);
   return applyDisambiguationGuards(corpus, filtered);
 }
@@ -1702,7 +1773,7 @@ async function fetchJsonWithTimeout(url, options, timeoutMs = OLLAMA_TIMEOUT_MS)
   }
 }
 
-async function classifyPostSemanticRoute(corpus) {
+async function classifyPostSemanticRoute(corpus, knownTopics = []) {
   const text = String(corpus || '').trim();
   if (!text || text.length < 6) {
     return { bucket: 'general', audience: 'general', subtopics: [], entities: [] };
@@ -1719,6 +1790,8 @@ async function classifyPostSemanticRoute(corpus) {
     'subtopics: array of 0-3 concise inferred niche labels (1-3 words each), based on meaning not phrase extraction.',
     'When applicable, include layered depth from broad to specific (example: baseball, texas rangers).',
     'entities: array of 0-2 proper names/titles/teams/products only when clearly present.',
+    `known_topics: ${Array.isArray(knownTopics) && knownTopics.length ? knownTopics.slice(0, 80).join(', ') : '(none)'}`,
+    'If the post clearly fits a known topic label, prefer that exact label as a subtopic.',
     'Rules:',
     '- infer intent/context (professional, hobby, literal vs metaphorical).',
     '- do NOT output filler fragments or mood phrases.',
@@ -1785,7 +1858,7 @@ async function classifyPostSemanticRoute(corpus) {
   }
 }
 
-async function inferNicheDepthTags(corpus, bucket, audience) {
+async function inferNicheDepthTags(corpus, bucket, audience, knownTopics = []) {
   const text = String(corpus || '').trim();
   if (!text || text.length < 6) return [];
 
@@ -1799,6 +1872,8 @@ async function inferNicheDepthTags(corpus, bucket, audience) {
     '- infer depth from broad subdomain to specific niche when available.',
     '- avoid sentence fragments and mood phrases.',
     '- tags must help route to interested audiences, not just restate text.',
+    `known_topics: ${Array.isArray(knownTopics) && knownTopics.length ? knownTopics.slice(0, 80).join(', ') : '(none)'}`,
+    '- prefer existing known topic labels when semantically appropriate; create new labels only when truly new.',
     '- if sports context exists, include sport type and team/league/franchise where relevant.',
     '- if entertainment context exists, include medium + title/franchise when relevant.',
     '- if technology context exists, include domain + platform/protocol/tool when relevant.',
@@ -2697,6 +2772,39 @@ function dropSubsumedTags(tags) {
     if (kept.includes(lower) && !originalOrder.includes(lower)) originalOrder.push(lower);
   }
   return originalOrder;
+}
+
+function alignTagsToTopicBank(tags, topicBank) {
+  const list = normalizeTagList(tags || []);
+  const bank = normalizeTagList(topicBank || []);
+  if (!list.length || !bank.length) return list;
+  const mapped = [];
+  for (const tag of list) {
+    if (bank.includes(tag)) {
+      mapped.push(tag);
+      continue;
+    }
+    const tagWords = tag.split(/\s+/).filter(Boolean);
+    let replacement = '';
+    for (const candidate of bank) {
+      if (candidate === tag) {
+        replacement = candidate;
+        break;
+      }
+      if (candidate.includes(tag) || tag.includes(candidate)) {
+        replacement = candidate;
+        break;
+      }
+      const candidateWords = candidate.split(/\s+/).filter(Boolean);
+      const overlap = tagWords.filter((w) => candidateWords.includes(w)).length;
+      if (overlap >= 2 || (overlap >= 1 && (candidateWords.length >= 3 || tagWords.length >= 3))) {
+        replacement = candidate;
+        break;
+      }
+    }
+    mapped.push(replacement || tag);
+  }
+  return normalizeTagList(mapped);
 }
 
 function filterNamedPhraseFragments(tags, namedPhrases) {
