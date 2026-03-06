@@ -1,42 +1,86 @@
 # Chirpy Publisher
 
-Chirpy Publisher is a self-hosted, sovereign social publishing app.
+Chirpy Publisher is a self-hosted social publishing app with a local-first identity model, IPFS publishing, LAN discovery, and AI-assisted tagging.
 
-It lets you:
+Chirpy has two main surfaces:
+- `Publisher` (`/`): create, stage, and publish posts.
+- `My ChirpSpace` (`/chirpspace.html`): browse feeds, discovered Chirpers, and topic-filtered views.
 
-- create rich-media posts locally
-- stage/publish posts to IPFS/IPNS
-- run identity profiles with local keys
-- maintain family/private visibility via encryption
-- discover other nodes through lightweight PubSub presence
-- run as a desktop app with bundled sidecars (IPFS + Ollama)
+## Core Principles
 
-No central backend is required for private keys.
+- Local-first identity: profiles, DIDs, IPNS selection, and encryption keys are managed on your node.
+- Sovereign runtime: no central backend required for your keys or staged content.
+- Inter-node discovery: Chirpers discover each other via pubsub + LAN presence.
+- Audience-centric tagging: AI tags try to route posts to interested audiences, not just extract words.
 
-## What Chirpy Is
+## Current Feature Set
 
-Chirpy is designed as a network of independent sites using shared protocol rules:
+### Publisher
+- Block-based composer (`text`, `title`, `image`, `video`, `link`).
+- Rich media processing:
+  - Images: framing/border/background controls + WebP output.
+  - Videos: ffmpeg processing + HLS/gif preview when available.
+- Per-block frame overrides for image border/frame background.
+- Staging history and lens preview.
+- Optional publish to IPFS/IPNS.
 
-- each node owns its own keys
-- public metadata is shared over open channels
-- private content is encrypted for recipients
-- no single host has everyone’s private data
+### Identity / Setup
+- Identity menu with profile management (`new`, `rename`, `delete`).
+- First-time walkthrough to complete required setup.
+- DID generation, encryption key generation, IPNS key creation/selection.
+- Node label (local label only; not global identity).
+- Desktop Chirper profile (nickname + interests).
 
-Protocol docs: [docs/network-protocol.md](docs/network-protocol.md)
+### Preferences Manager (Identity Menu)
+- Search/add topic preferences.
+- Topic bank management:
+  - Auto-populated from current post tags.
+  - Supports custom topics not yet seen in posts.
+- Hidden topic controls:
+  - Unhide globally hidden topics.
+  - Unhide per-user hidden topics.
 
-## Security Model
+### ChirpSpace
+- Chirpers radar with activity ordering.
+- Click Chirper name to load that Chirper's public feed.
+- Click topic tags for menu actions:
+  - View: all posts on topic / this user on topic.
+  - Hide: all posts on topic / this user on topic.
+- Synergy ordering: shared topics with your local profile history are prioritized.
+- Cross-node public feed loading via local proxy endpoint.
 
-- Private keys stay local (browser storage + local IPFS repo)
-- `ipfs-data/` is ignored by git
-- `staged/` is ignored by git
-- `runtime/` is ignored by git
-- this repo can be public without exposing your private posts or local keys, as long as ignored paths are not force-added
+### Discovery / Presence
+- Presence topic: `chirpy.users.v1`.
+- Pubsub presence + LAN UDP heartbeat + LAN HTTP peer scan fallback.
+- Users ordered by last activity.
+- Presence payload includes tag summaries and reachable HTTP base metadata.
+
+### AI Tagging
+- Ollama-backed semantic routing + niche inference.
+- Topic-bank-aware prompting and tag alignment:
+  - known topics are provided as hints,
+  - tags are aligned to existing known topics when semantically appropriate,
+  - new topics still allowed when genuinely new.
+
+## Security and Data Boundaries
+
+Chirpy is designed so publishing this repo does not expose your private keys/content by default:
+
+- Local runtime/state paths are git-ignored:
+  - `ipfs-data/`
+  - `runtime/`
+  - `staged/`
+- Sidecar binaries are bundled intentionally under `resources/bin/*` (public executable artifacts, not secrets).
+- Identity and encryption materials are generated locally per node/profile.
+
+Important: do not force-add ignored runtime directories.
 
 ## Requirements
 
-- Node.js 20+
-- `ffmpeg` in `PATH`
-- For desktop builds: platform binaries in `resources/bin` (IPFS + Ollama)
+- Node.js `>=20`
+- `npm`
+- `ffmpeg` in `PATH` (for full video processing)
+- Electron runtime deps (installed via `npm install`)
 
 ## Install
 
@@ -44,35 +88,31 @@ Protocol docs: [docs/network-protocol.md](docs/network-protocol.md)
 npm install
 ```
 
-## Run
+## Run (Web Server Mode)
 
 ```bash
 npm start
 ```
 
-Default URL: `http://localhost:3020`
-
-- Publisher UI: `http://localhost:3020/`
+Default:
+- Publisher: `http://localhost:3020/`
 - My ChirpSpace: `http://localhost:3020/chirpspace.html`
-- UI versions page: `http://localhost:3020/versions`
 
-## Desktop (Electron)
-
-Run desktop shell in development:
+## Run (Desktop / Electron)
 
 ```bash
 npm run desktop
 ```
 
-Build installers:
+## Build Desktop Installers
 
 ```bash
 npm run build:desktop
 ```
 
-### Sidecar Binaries
+## Sidecar Binaries Layout
 
-Add binaries before packaging:
+Place binaries under `resources/bin`:
 
 - `resources/bin/darwin-arm64/ipfs`
 - `resources/bin/darwin-arm64/ollama`
@@ -83,84 +123,72 @@ Add binaries before packaging:
 - `resources/bin/win32-x64/ipfs.exe`
 - `resources/bin/win32-x64/ollama.exe`
 
-On app start, Chirpy will:
+Notes:
+- Ollama binary must be daemon-capable (`serve` style supported by the launcher flow in this repo).
+- Current repo includes active work around sidecar startup compatibility across macOS variants.
 
-1. start bundled IPFS if no daemon is active
-2. initialize `IPFS_PATH` on first run and enable pubsub
-3. start bundled Ollama if not already active
-4. pull `nomic-embed-text` model in background
-5. launch ChirpSpace dashboard
+## First Run Flow (Expected)
 
-## First-Time Setup
+1. Open Identity menu.
+2. Run first-time setup.
+3. Ensure profile has DID, encryption keys, and non-`self` IPNS key.
+4. Save Chirper nickname + interests.
+5. Confirm runtime status (`IPFS`, `Ollama`, model readiness).
+6. Stage/publish first post.
 
-On first run, Chirpy automatically opens the Identity panel and requires setup before staging posts.
+## Key API Endpoints
 
-It walks through:
-
-1. Node Label (optional, local installation label)
-2. Profile Name (must be unique on your local node only)
-3. DID generation
-4. IPNS key discovery/creation
-5. Encryption key generation
-
-## Basic Usage
-
-1. Build a post with blocks (`text`, `title`, `image`, `video`, `link`)
-2. Add media files
-3. Style the card/frame
-4. Stage post
-5. Optionally publish to IPFS/IPNS
-6. View history and ChirpSpace feed
-
-## Key APIs
-
+### Setup / Identity
+- `GET /api/setup`
 - `GET /api/network-node`
-- `GET /api/network-node/check-name?name=...`
 - `POST /api/network-node`
-- `POST /api/network-node/profile` (announce active DID/IPNS for discovery)
-- `GET /api/users` (presence users ordered by last activity)
-- `GET /api/protocol/schemas`
-- `POST /api/protocol/validate` with `{ schemaId, payload }`
-- `GET /api/link-preview?url=...`
-- `POST /stage` (multipart, media pipeline with image/video processing)
+- `GET /api/network-node/check-name?name=...`
+- `POST /api/network-node/profile`
+- `POST /api/identity/create`
+- `POST /api/identity/encryption-keys`
+- `GET /api/ipfs/keys`
+- `POST /api/ipfs/keys`
+
+### Posts / Feeds
+- `POST /stage`
 - `GET /api/stages`
 - `GET /api/stages/:stageId`
-- `GET /api/chirpspace?...`
+- `GET /api/chirpspace`
+- `GET /api/chirpspace/remote`
 - `POST /api/chirpspace/:stageId/make-public`
-- `GET /staged/:stageId/...`
 
-## Protocol Validation
+### Discovery / Protocol
+- `GET /api/users`
+- `GET /api/presence/self`
+- `GET /api/protocol/schemas`
+- `POST /api/protocol/validate`
 
-You can test payload compatibility:
-
-```bash
-curl -X POST http://localhost:3020/api/protocol/validate \
-  -H "content-type: application/json" \
-  -d '{
-    "schemaId":"chirpy.presence.v1",
-    "payload":{
-      "schema":"chirpy.presence/1.0.0",
-      "id":"node-12345678",
-      "name":"node-alpha",
-      "timestamp":"2026-03-05T12:00:00.000Z"
-    }
-  }'
-```
+### Topic Bank
+- `GET /api/topic-bank`
+- `PUT /api/topic-bank`
 
 ## Environment Variables
 
 - `PORT` (default `3020`)
-- `CHIRPY_NODE_NAME` (optional fixed node name)
+- `CHIRPY_BIND_HOST` (default `0.0.0.0`)
+- `CHIRPY_IPFS_BIN` (default `ipfs`)
+- `CHIRPY_IPFS_API` (default `http://127.0.0.1:5001`)
 - `CHIRPY_PRESENCE_TOPIC` (default `chirpy.users.v1`)
+- `CHIRPY_PUBSUB_TOPIC` (default `chirpy.new-post`)
 - `CHIRPY_PRESENCE_HEARTBEAT_MS` (default `30000`)
 - `CHIRPY_PRESENCE_STALE_MS` (default `300000`)
-- `CHIRPY_PUBSUB_TOPIC` (default `chirpy.new-post`)
-- `REQUIRE_IPFS` (default `false`)
+- `CHIRPY_LAN_PRESENCE_PORT` (default `47777`)
+- `CHIRPY_LAN_PRESENCE_ADDR` (default `255.255.255.255`)
+- `CHIRPY_LAN_SCAN_ENABLED` (default `true`)
+- `CHIRPY_LAN_SCAN_TIMEOUT_MS` (default `900`)
+- `CHIRPY_OLLAMA_TIMEOUT_MS` (default `7000`)
 - `OLLAMA_HOST` (default `http://127.0.0.1:11434`)
 - `OLLAMA_MODEL` (default `llama3.2:3b`)
+- `OLLAMA_EMBED_MODEL` (default `nomic-embed-text`)
+- `REQUIRE_IPFS` (default `false`)
 
-## Notes
+## Development Notes
 
-- If `ipfs` is unavailable, the app still works locally, but cross-node presence/publish features are limited.
-- In desktop mode, if sidecar binaries are missing, the UI still opens but runtime status shows missing engines.
-- Do not force-add ignored paths when committing (`ipfs-data`, `staged`, `runtime`).
+- `npm run check` performs syntax checks for core runtime files.
+- Presence and radar behavior are eventually consistent by design; allow a heartbeat cycle before validating peer visibility.
+- Some settings (topic hides) are currently client-local (`localStorage`) by design.

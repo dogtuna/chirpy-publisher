@@ -40,13 +40,7 @@
       "desktop/**/*",
       "src/**/*",
       "public/**/*",
-      "public-v1/**/*",
-      "public-v2/**/*",
-      "public-v3/**/*",
-      "public-v4/**/*",
-      "public-v5/**/*",
       "docs/**/*",
-      "versions.html",
       "package.json"
     ],
     "extraResources": [

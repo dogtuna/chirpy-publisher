@@ -264,16 +264,6 @@ bootstrap().catch((error) => {
 app.get('/', (_req, res) => {
   res.sendFile(path.join(projectRoot, 'public', 'index.html'));
 });
-
-app.get('/versions', (_req, res) => {
-  res.sendFile(path.join(projectRoot, 'versions.html'));
-});
-
-app.use('/v1', express.static(path.join(projectRoot, 'public-v1')));
-app.use('/v2', express.static(path.join(projectRoot, 'public-v2')));
-app.use('/v3', express.static(path.join(projectRoot, 'public-v3')));
-app.use('/v4', express.static(path.join(projectRoot, 'public-v4')));
-app.use('/v5', express.static(path.join(projectRoot, 'public-v5')));
 app.use('/staged', express.static(stageRoot));
 app.use(express.static(path.join(projectRoot, 'public')));
 
@@ -802,12 +792,6 @@ app.listen(PORT, BIND_HOST, () => {
   console.log(`Chirpy Publisher server running at http://${BIND_HOST}:${PORT}`);
   console.log(`Publisher: http://${BIND_HOST}:${PORT}/`);
   console.log(`My ChirpSpace: http://${BIND_HOST}:${PORT}/chirpspace.html`);
-  console.log(`Version Picker: http://${BIND_HOST}:${PORT}/versions`);
-  console.log(`V1 (Focused Writer): http://${BIND_HOST}:${PORT}/v1`);
-  console.log(`V2 (Split Studio): http://${BIND_HOST}:${PORT}/v2`);
-  console.log(`V3 (Stacked Sections): http://${BIND_HOST}:${PORT}/v3`);
-  console.log(`V4 (Dashboard Cards): http://${BIND_HOST}:${PORT}/v4`);
-  console.log(`V5 (Sidebar Editor): http://${BIND_HOST}:${PORT}/v5`);
 });
 
 async function bootstrap() {
