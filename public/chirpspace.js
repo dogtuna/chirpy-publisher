@@ -28,7 +28,8 @@ const state = {
   desktopStatus: null,
   radarCandidates: [],
   selectedChirperId: "",
-  selectedTag: ""
+  selectedTag: "",
+  viewerPublicTags: []
 };
 
 boot();
@@ -289,9 +290,14 @@ async function loadRadar() {
     if (!postsResp.ok || !postsData.ok) throw new Error(postsData.error || "posts load failed");
     const users = Array.isArray(usersData.users) ? usersData.users : [];
     const tagsByDid = aggregateTagsByDid(Array.isArray(postsData.posts) ? postsData.posts : []);
+    const viewer = activeViewer();
+    const viewerTagsFromPosts = viewer?.userDid ? tagsByDid.get(viewer.userDid) || [] : [];
+    const viewerTagsFromPresence = users.find((u) => String(u.profileDid || "").trim() === String(viewer?.userDid || "").trim())?.tags || [];
+    state.viewerPublicTags = normalizeTagList([...(viewerTagsFromPosts || []), ...(viewerTagsFromPresence || [])]).slice(0, 24);
     const candidates = users.map((user) => {
       const announcedTags = Array.isArray(user.tags) ? user.tags : [];
-      const tags = tagsByDid.get(user.profileDid) || announcedTags;
+      const rawTags = tagsByDid.get(user.profileDid) || announcedTags;
+      const tags = prioritizeTagsByAffinity(rawTags, state.viewerPublicTags);
       return {
         id: user.id,
         name: user.name || "unnamed",
@@ -314,6 +320,32 @@ async function loadRadar() {
   } catch (error) {
     els.radarList.innerHTML = `<div class="empty-state">Failed to load radar: ${escapeHtml(error.message)}</div>`;
   }
+}
+
+function prioritizeTagsByAffinity(tags, affinityTags) {
+  const list = normalizeTagList(tags || []);
+  const affinity = new Set(normalizeTagList(affinityTags || []));
+  if (!list.length || !affinity.size) return list;
+  const overlap = [];
+  const rest = [];
+  for (const tag of list) {
+    if (affinity.has(tag)) overlap.push(tag);
+    else rest.push(tag);
+  }
+  return [...overlap, ...rest];
+}
+
+function normalizeTagList(values) {
+  const raw = Array.isArray(values) ? values : String(values || "").split(",");
+  const out = [];
+  const seen = new Set();
+  for (const value of raw) {
+    const clean = String(value || "").trim().toLowerCase();
+    if (!clean || seen.has(clean)) continue;
+    seen.add(clean);
+    out.push(clean);
+  }
+  return out;
 }
 
 async function refreshWalkthroughGate() {
